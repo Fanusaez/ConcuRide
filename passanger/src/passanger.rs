@@ -3,6 +3,7 @@ use std::io;
 use actix::{Actor, Context, StreamHandler, ActorFutureExt, Handler, Addr};
 use actix_async_handler::async_handler;
 use tokio::io::{AsyncWriteExt, WriteHalf};
+use tokio::sync::oneshot::Sender;
 
 use crate::utils::Coordinates;
 const LEADER_PORT: u16 = 6000;
@@ -50,6 +51,7 @@ pub struct Passenger {
     id: u16,
     leader_port: u16,
     tcp_sender: Addr<TcpSender>,
+    completion_signal: Option<Sender<()>>,
 }
 
 impl Actor for Passenger {
@@ -78,11 +80,12 @@ impl Handler<Coordinates> for Passenger {
 }
 
 impl Passenger {
-    pub fn new(port: u16, tcp_sender: Addr<TcpSender>) -> Self {
+    pub fn new(port: u16, tcp_sender: Addr<TcpSender>, completion_signal:  Sender<()>) -> Self {
         Passenger {
             id: port,
             leader_port: LEADER_PORT,
             tcp_sender,
+            completion_signal: Some(completion_signal),
         }
     }
 }
