@@ -1,6 +1,6 @@
-use crate::passanger::Passanger;
+use crate::passanger::{Passenger, TcpSender};
 use actix::{Actor, ActorFutureExt, Handler, Message, StreamHandler, WrapFuture};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, split, WriteHalf};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, split};
 use tokio::net::{TcpStream};
 use tokio_stream::wrappers::LinesStream;
 
@@ -20,12 +20,22 @@ async fn main() -> std::io::Result<()> {
     let rides = utils::get_rides(orders_path)?;
 
     /// Lo hice igual que la catedra, debe haber una manera de pasarlo al archivo passanger
+
     let stream = TcpStream::connect(format!("127.0.0.1:{}", LEADER_PORT)).await?;
-    Passanger::create(move |ctx| {
+    let addr = Passenger::create(move |ctx| {
         let (read, write_half) = split(stream);
-        Passanger::add_stream(LinesStream::new(BufReader::new(read).lines()), ctx);
+        Passenger::add_stream(LinesStream::new(BufReader::new(read).lines()), ctx);
         let write = Some(write_half);
-        Passanger::new(port, rides, write)
+        let addr_tcp = TcpSender::new(write).start();
+        Passenger::new(port, addr_tcp)
     });
+
+    // Send the coordinates to the passenger actor
+    for (_, coordinates) in rides.iter() {
+        let coordinates_aux = coordinates.clone();
+        println!("Enviando mensaje: {:?}", coordinates_aux);
+        addr.do_send(coordinates_aux);
+    }
+
     Ok(())
 }
