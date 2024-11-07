@@ -2,6 +2,8 @@ use crate::passanger::{Passenger};
 use actix::{Actor, ActorFutureExt, Handler, Message, StreamHandler, WrapFuture};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 use actix::prelude::*;
+use serde::Serialize;
+use tokio::sync::oneshot;
 use crate::utils::Coordinates;
 
 mod passanger;
@@ -19,11 +21,9 @@ async fn main() -> std::io::Result<()> {
     let rides = utils::get_rides(orders_path)?;
 
     let rides_vec: Vec<Coordinates> = rides.iter().map(|(_, coordinates)| coordinates.clone()).collect();
-
-    Passenger::start(port, rides_vec).await?;
-
-    tokio::signal::ctrl_c().await.expect("Error al esperar Ctrl+C");
-    System::current().stop();
+    let (tx, rx) = oneshot::channel();
+    Passenger::start(port, rides_vec, tx).await?;
+    let _ = rx.await;
 
     Ok(())
 }

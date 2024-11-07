@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::io;
 use std::sync::{Arc, RwLock};
 use actix::{Actor, Context, StreamHandler};
@@ -53,7 +52,6 @@ impl Driver {
                     is_leader: is_leader.clone(),
                 }
             });
-            break
         }
         Ok(())
     }
