@@ -1,7 +1,7 @@
 use std::io;
 use std::sync::{Arc, RwLock};
 use actix::{Actor, AsyncContext, Context, Handler, Message, StreamHandler};
-use tokio::io::{split, AsyncBufReadExt, BufReader};
+use tokio::io::{split, AsyncBufReadExt, BufReader, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_stream::wrappers::LinesStream;
 use serde::{Serialize, Deserialize};
@@ -80,6 +80,23 @@ impl Driver {
     pub async fn start(port: u16, drivers_ports: Vec<u16>) -> Result<(), io::Error> {
         let should_be_leader = port == drivers_ports[LIDER_PORT_IDX];
         let is_leader = Arc::new(RwLock::new(should_be_leader));
+
+        if *is_leader.read().unwrap() {
+            println!("I'M LEADER");
+        }
+
+        else {
+            let stream = TcpStream::connect(format!("127.0.0.1:{}", drivers_ports[LIDER_PORT_IDX])).await?;
+            let (read, mut write_half) = split(stream);
+
+            println!("Connect to leader");
+            let message = MessageType::StatusUpdate {
+                status: format!("Driver {port} connected"),
+            };
+
+            let serialized_message = serde_json::to_string(&message).unwrap();
+            write_half.write_all(serialized_message.as_bytes()).await?;
+        }
 
         let listener = TcpListener::bind(format!("127.0.0.1:{}", port)).await?;
         println!("WAITING FOR PASSENGERS TO CONNECT\n");
