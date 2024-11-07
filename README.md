@@ -4,11 +4,17 @@
 
 ## Aplicaciones
 
-![Aplicaciones](./diagramas/concu_1-Página-3.jpg)
+Se definen tres aplicaciones: una de conductores, una de pasajeros y otra de pagos.
+
+![Aplicaciones](./diagramas/concu_1-Página-1.jpg)
 
 ## Esquema
 
-![Esquema](./diagramas/concu_1-Página-1.jpg)
+![Esquema](./diagramas/concu_1-Página-3.jpg)
+
+## Diseño
+
+![Diseño](./diagramas/concu_1-Página-2.jpg)
 
 ## Actores
 
