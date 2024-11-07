@@ -2,12 +2,22 @@ use std::hash::Hash;
 use std::io;
 use actix::{Actor, Context, StreamHandler, ActorFutureExt, Handler, Addr};
 use actix_async_handler::async_handler;
+use serde::{Deserialize, Serialize};
 use tokio::io::{split, AsyncBufReadExt, AsyncWriteExt, BufReader, WriteHalf};
 use tokio::net::TcpStream;
 use tokio::sync::oneshot::Sender;
 use tokio_stream::wrappers::LinesStream;
 use crate::utils::Coordinates;
 const LEADER_PORT: u16 = 6000;
+
+
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(tag = "message_type")]
+/// enum Message used to deserialize
+enum MessageType {
+    Coordinates(Coordinates),
+    StatusUpdate { status: String },
+}
 
 
 pub struct Passenger {
@@ -110,11 +120,11 @@ impl Handler<Coordinates> for TcpSender {
         let mut write = self.write.take()
             .expect("No debería poder llegar otro mensaje antes de que vuelva por usar AtomicResponse");
 
-        //let serialized = serde_json::to_string(&msg).expect("should serialize");
-        let serialized = format!("{:?}\n", msg);
+        let msg_type = MessageType::Coordinates(msg);
+        let serialized = serde_json::to_string(&msg_type).expect("should serialize");
         let ret_write = async move {
             write
-                .write_all(serialized.as_bytes()).await
+                .write_all(format!("{}\n", serialized).as_bytes()).await
                 .expect("should have sent");
             write
         }.await;

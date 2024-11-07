@@ -1,9 +1,29 @@
 use std::io;
 use std::sync::{Arc, RwLock};
-use actix::{Actor, Context, StreamHandler};
+use actix::{Actor, AsyncContext, Context, Handler, Message, StreamHandler};
 use tokio::io::{split, AsyncBufReadExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_stream::wrappers::LinesStream;
+use serde::{Serialize, Deserialize};
+
+/// Coordinates struct, ver como se puede importar desde otro archivo, esto esta en utils.rs\
+#[derive(Serialize, Deserialize, Message, Debug, Clone)]
+#[rtype(result = "()")]
+pub struct Coordinates {
+    pub x_origin: u16,
+    pub y_origin: u16,
+    pub x_dest: u16,
+    pub y_dest: u16,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(tag = "message_type")]
+/// enum Message used to deserialize
+pub enum MessageType {
+    Coordinates(Coordinates),
+    // TODO: Add more message types, StatusUpdate is useless for now.
+    StatusUpdate { status: String },
+}
 
 
 const LIDER_PORT_IDX : usize = 0;
@@ -22,17 +42,35 @@ impl Actor for Driver {
     type Context = Context<Self>;
 }
 
-/// Handles the messages coming from the associated stream.
 impl StreamHandler<Result<String, io::Error>> for Driver {
+    /// Handles the messages coming from the associated stream.
+    /// Matches the message type and sends it to the corresponding handler.
     fn handle(&mut self, read: Result<String, io::Error>, ctx: &mut Self::Context) {
         if let Ok(line) = read {
-            println!("{}", line);
+            let message: MessageType = serde_json::from_str(&line).expect("Failed to deserialize message");
+            match message {
+                MessageType::Coordinates(coords)=> {
+                    ctx.address().do_send(coords);
+                }
+
+                MessageType::StatusUpdate { status } => {
+                    println!("Status: {}", status);
+                }
+            }
         } else {
             println!("[{:?}] Failed to read line {:?}", self.id, read);
         }
     }
 }
 
+
+impl Handler<Coordinates> for Driver {
+    type Result = ();
+
+    fn handle(&mut self, msg: Coordinates, _ctx: &mut Self::Context) -> Self::Result {
+        println!("Received coordinates from passenger: {:?}", msg);
+    }
+}
 
 impl Driver {
     /// Creates the actor and starts listening for incoming passengers

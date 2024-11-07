@@ -1,4 +1,4 @@
-use crate::passanger::{Passenger};
+use crate::passenger::{Passenger};
 use actix::{Actor, ActorFutureExt, Handler, Message, StreamHandler, WrapFuture};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 use actix::prelude::*;
@@ -6,7 +6,7 @@ use serde::Serialize;
 use tokio::sync::oneshot;
 use crate::utils::Coordinates;
 
-mod passanger;
+mod passenger;
 mod utils;
 
 const LEADER_PORT: u16 = 6000;
