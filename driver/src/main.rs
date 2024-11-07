@@ -1,22 +1,19 @@
-// creame un server que escuche en el puerto 6000 y acepte conexiones y printee lo que le envian
-
 use std::io::{Read};
-use std::net::{TcpListener};
-use std::thread::sleep;
+use actix_rt::System;
+use crate::driver::Driver;
 
-fn main() {
-    let listener = TcpListener::bind("127.0.0.1:6000").unwrap();
-    for stream in listener.incoming() {
-        match stream {
-            Ok(mut stream) =>  loop {
-                let mut buffer = [0; 1024];
-                stream.read(&mut buffer).unwrap();
-                println!("Received: {}", String::from_utf8_lossy(&buffer));
-                sleep(std::time::Duration::from_secs(2));
-            }
-            Err(e) => {
-                println!("Error: {}", e);
-            }
-        }
-    }
+mod driver;
+
+/// Receives a port and creates driver actor
+#[actix_rt::main]
+async fn main() -> std::io::Result<()> {
+    let args: Vec<String> = std::env::args().collect();
+    let port = args[1].parse::<u16>().unwrap();
+
+    // hardcoded for now
+    let drivers_ports : Vec<u16> = vec![6000, 6001, 6002, 6003, 6004];
+
+    Driver::start(port, drivers_ports).await?;
+
+    Ok(())
 }
