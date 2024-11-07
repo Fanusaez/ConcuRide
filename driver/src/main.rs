@@ -4,6 +4,7 @@ use crate::driver::Driver;
 
 mod driver;
 
+/// Receives a port and creates driver actor
 #[actix_rt::main]
 async fn main() -> std::io::Result<()> {
     let args: Vec<String> = std::env::args().collect();
@@ -13,9 +14,6 @@ async fn main() -> std::io::Result<()> {
     let drivers_ports : Vec<u16> = vec![6000, 6001, 6002, 6003, 6004];
 
     Driver::start(port, drivers_ports).await?;
-
-    tokio::signal::ctrl_c().await.expect("Error al esperar Ctrl+C");
-    System::current().stop();
 
     Ok(())
 }
