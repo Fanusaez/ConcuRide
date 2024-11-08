@@ -2,13 +2,14 @@ use std::collections::HashMap;
 use std::io;
 use std::sync::{Arc, RwLock};
 use actix::{Actor, AsyncContext, Context, Handler, Message, StreamHandler};
-use tokio::io::{split, AsyncBufReadExt, BufReader, AsyncWriteExt, WriteHalf};
+use actix_async_handler::async_handler;
+use tokio::io::{split, AsyncBufReadExt, BufReader, AsyncWriteExt, WriteHalf, AsyncReadExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_stream::wrappers::LinesStream;
 use serde::{Serialize, Deserialize};
 
 /// Coordinates struct, ver como se puede importar desde otro archivo, esto esta en utils.rs\
-#[derive(Serialize, Deserialize, Message, Debug, Clone)]
+#[derive(Serialize, Deserialize, Message, Debug, Clone, Copy)]
 #[rtype(result = "()")]
 pub struct Coordinates {
     pub x_origin: u16,
@@ -26,6 +27,11 @@ pub enum MessageType {
     StatusUpdate { status: String },
 }
 
+pub enum Sates {
+    Driving,
+    Idle,
+}
+
 
 const LIDER_PORT_IDX : usize = 0;
 
@@ -34,10 +40,11 @@ pub struct Driver {
     pub id: u16,
     /// Whether the driver is the leader
     pub is_leader: Arc<RwLock<bool>>,
-    // The connections to the drivers TODO
-    pub active_drivers: Arc<HashMap<u16, WriteHalf<TcpStream>>>,
+    /// The connections to the drivers
+    pub active_drivers: Arc<RwLock<HashMap<u16, Option<WriteHalf<TcpStream>>>>>,
+    /// States of the driver
+    pub state: Sates,
 }
-
 
 impl Actor for Driver {
     type Context = Context<Self>;
@@ -69,8 +76,38 @@ impl Handler<Coordinates> for Driver {
     type Result = ();
 
     fn handle(&mut self, msg: Coordinates, _ctx: &mut Self::Context) -> Self::Result {
-        println!("Received coordinates from passenger: {:?}", msg);
+        let is_leader = *self.is_leader.read().unwrap();
+        if is_leader {
+            let active_drivers_clone = Arc::clone(&self.active_drivers);
+            let msg_clone = msg.clone();
+
+            actix::spawn(async move {
+                if let Ok(mut active_drivers_clone) = active_drivers_clone.write() {
+                    for (id, write) in active_drivers_clone.iter_mut() {
+                        let mut half_write = write.take()
+                            .expect("No debería poder llegar otro mensaje antes de que vuelva por usar AtomicResponse");
+
+                        let msg_type = MessageType::Coordinates(msg_clone);
+                        let serialized = serde_json::to_string(&msg_type).expect("should serialize");
+                        let ret_write = async move {
+                            half_write
+                                .write_all(format!("{}\n", serialized).as_bytes()).await
+                                .expect("should have sent");
+                            half_write
+                        }.await;
+
+                        *write = Some(ret_write);
+                    }
+                } else {
+                    eprintln!("No se pudo obtener el lock de lectura en `active_drivers`");
+                }
+            });
+        } else {
+            self.handle_ride_request(msg);
+        }
+
     }
+
 }
 
 impl Driver {
@@ -81,26 +118,27 @@ impl Driver {
     pub async fn start(port: u16, mut drivers_ports: Vec<u16>) -> Result<(), io::Error> {
         let should_be_leader = port == drivers_ports[LIDER_PORT_IDX];
         let is_leader = Arc::new(RwLock::new(should_be_leader));
-        let mut active_drivers: HashMap<u16, WriteHalf<TcpStream>> = HashMap::new();
+        let mut active_drivers: HashMap<u16, Option<WriteHalf<TcpStream>>> = HashMap::new();
 
         // Remove the leader port from the list of drivers
         drivers_ports.remove(LIDER_PORT_IDX);
 
-
+        // Initialization of the leader
         if *is_leader.read().unwrap() {
             /// Connect to the other drivers and save connections
             /// TODO: Habria que modularizar esto y moverlo a un diferente archivo
             for driver_port in drivers_ports.iter() {
                 let stream = TcpStream::connect(format!("127.0.0.1:{}", driver_port)).await?;
                 let (_, write_half) = split(stream);
-                active_drivers.insert(*driver_port, write_half);
+                active_drivers.insert(*driver_port, Some(write_half));
             }
         }
 
         else {
+            // TODO funcionalidad del driver que no es lider
         }
 
-        let active_drivers_arc = Arc::new(active_drivers);
+        let active_drivers_arc = Arc::new(RwLock::new(active_drivers));
 
         let listener = TcpListener::bind(format!("127.0.0.1:{}", port)).await?;
         println!("WAITING FOR PASSENGERS TO CONNECT(leader) OR ACCEPTING LEADER(drivers)\n");
@@ -117,9 +155,16 @@ impl Driver {
                     id: port,
                     is_leader: is_leader.clone(),
                     active_drivers: active_drivers_arc.clone(),
+                    state: Sates::Idle,
                 }
             });
         }
         Ok(())
+    }
+
+    /// Handles the ride request from the leader
+    pub fn handle_ride_request(&self, msg: Coordinates) {
+        /// TODO
+        print!("Ride request received by diver 6001: {:?}/n", msg);
     }
 }
