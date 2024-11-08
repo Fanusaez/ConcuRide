@@ -1,7 +1,8 @@
+use std::collections::HashMap;
 use std::io;
 use std::sync::{Arc, RwLock};
 use actix::{Actor, AsyncContext, Context, Handler, Message, StreamHandler};
-use tokio::io::{split, AsyncBufReadExt, BufReader, AsyncWriteExt};
+use tokio::io::{split, AsyncBufReadExt, BufReader, AsyncWriteExt, WriteHalf};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_stream::wrappers::LinesStream;
 use serde::{Serialize, Deserialize};
@@ -34,7 +35,7 @@ pub struct Driver {
     /// Whether the driver is the leader
     pub is_leader: Arc<RwLock<bool>>,
     // The connections to the drivers TODO
-    //pub drivers_connections: Arc<HashMap<u16, TcpStream>>,
+    pub active_drivers: Arc<HashMap<u16, WriteHalf<TcpStream>>>,
 }
 
 
@@ -77,29 +78,32 @@ impl Driver {
     /// # Arguments
     /// * `port` - The port of the driver
     /// * `drivers_ports` - The list of driver ports TODO (leader should try to connect to them)
-    pub async fn start(port: u16, drivers_ports: Vec<u16>) -> Result<(), io::Error> {
+    pub async fn start(port: u16, mut drivers_ports: Vec<u16>) -> Result<(), io::Error> {
         let should_be_leader = port == drivers_ports[LIDER_PORT_IDX];
         let is_leader = Arc::new(RwLock::new(should_be_leader));
+        let mut active_drivers: HashMap<u16, WriteHalf<TcpStream>> = HashMap::new();
+
+        // Remove the leader port from the list of drivers
+        drivers_ports.remove(LIDER_PORT_IDX);
+
 
         if *is_leader.read().unwrap() {
-            println!("I'M LEADER");
+            /// Connect to the other drivers and save connections
+            /// TODO: Habria que modularizar esto y moverlo a un diferente archivo
+            for driver_port in drivers_ports.iter() {
+                let stream = TcpStream::connect(format!("127.0.0.1:{}", driver_port)).await?;
+                let (_, write_half) = split(stream);
+                active_drivers.insert(*driver_port, write_half);
+            }
         }
 
         else {
-            let stream = TcpStream::connect(format!("127.0.0.1:{}", drivers_ports[LIDER_PORT_IDX])).await?;
-            let (read, mut write_half) = split(stream);
-
-            println!("Connect to leader");
-            let message = MessageType::StatusUpdate {
-                status: format!("Driver {port} connected"),
-            };
-
-            let serialized_message = serde_json::to_string(&message).unwrap();
-            write_half.write_all(serialized_message.as_bytes()).await?;
         }
 
+        let active_drivers_arc = Arc::new(active_drivers);
+
         let listener = TcpListener::bind(format!("127.0.0.1:{}", port)).await?;
-        println!("WAITING FOR PASSENGERS TO CONNECT\n");
+        println!("WAITING FOR PASSENGERS TO CONNECT(leader) OR ACCEPTING LEADER(drivers)\n");
 
         while let Ok((stream,  _)) = listener.accept().await {
 
@@ -112,6 +116,7 @@ impl Driver {
                 Driver {
                     id: port,
                     is_leader: is_leader.clone(),
+                    active_drivers: active_drivers_arc.clone(),
                 }
             });
         }
