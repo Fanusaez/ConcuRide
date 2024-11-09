@@ -3,6 +3,7 @@ use std::io;
 use std::sync::{Arc, RwLock};
 use actix::{Actor, AsyncContext, Context, Handler, Message, StreamHandler};
 use actix_async_handler::async_handler;
+use rand::Rng;
 use tokio::io::{split, AsyncBufReadExt, BufReader, AsyncWriteExt, WriteHalf, AsyncReadExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_stream::wrappers::LinesStream;
@@ -134,14 +135,28 @@ impl Driver {
 
     /// Handles the ride request from the leader
     pub fn handle_ride_request(&self, msg: RideRequest) {
-        /// TODO
-        println!("Ride request received by diver 6001: {:?}", msg);
+        let probability = 0.1;
+        let result = boolean_with_probability(probability);
+        if result {
+            println!("Driver {} accepted the ride request", self.id);
+        } else {
+            println!("Driver {} rejected the ride request", self.id);
+        }
+
     }
 
-    pub fn handle_ride_request_as_lider(&self, msg: RideRequest) {
+    /// Handles the ride request from passanger
+    /// TODO: LOGICA PARA VER A QUIEN SE LE DAN LOS VIAJES, ACA SE ESTA MANDANDO A TODOS
+    /// # Arguments
+    /// * `msg` - The message containing the ride request
+    pub fn handle_ride_request_as_lider(&mut self, msg: RideRequest) {
 
         let active_drivers_clone = Arc::clone(&self.active_drivers);
         let msg_clone = msg.clone();
+
+        // Lo pongo el pending_rides hasta que alguien acepte el viaje
+        let mut pending_rides = self.pending_rides.write().unwrap();
+        pending_rides.insert(msg.id.clone(), msg.clone());
 
         // TODO: VER SI SE PUEDE MODULARIZAR ESTO DE ALGUNA MANERA
         // Otro lugar que se encarge de los mensajes?
@@ -167,4 +182,9 @@ impl Driver {
             }
         });
     }
+}
+
+pub fn boolean_with_probability(probability: f64) -> bool {
+    let mut rng = rand::thread_rng();
+    rng.gen::<f64>() < probability
 }
