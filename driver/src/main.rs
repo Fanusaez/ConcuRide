@@ -3,6 +3,7 @@ use actix_rt::System;
 use crate::driver::Driver;
 
 mod driver;
+mod init;
 
 /// Receives a port and creates driver actor
 #[actix_rt::main]

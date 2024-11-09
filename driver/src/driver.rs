@@ -8,6 +8,8 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio_stream::wrappers::LinesStream;
 use serde::{Serialize, Deserialize};
 
+use crate::init;
+
 /// Coordinates struct, ver como se puede importar desde otro archivo, esto esta en utils.rs\
 #[derive(Serialize, Deserialize, Message, Debug, Clone, Copy)]
 #[rtype(result = "()")]
@@ -78,34 +80,10 @@ impl Handler<Coordinates> for Driver {
     fn handle(&mut self, msg: Coordinates, _ctx: &mut Self::Context) -> Self::Result {
         let is_leader = *self.is_leader.read().unwrap();
         if is_leader {
-            let active_drivers_clone = Arc::clone(&self.active_drivers);
-            let msg_clone = msg.clone();
-
-            actix::spawn(async move {
-                if let Ok(mut active_drivers_clone) = active_drivers_clone.write() {
-                    for (id, write) in active_drivers_clone.iter_mut() {
-                        let mut half_write = write.take()
-                            .expect("No debería poder llegar otro mensaje antes de que vuelva por usar AtomicResponse");
-
-                        let msg_type = MessageType::Coordinates(msg_clone);
-                        let serialized = serde_json::to_string(&msg_type).expect("should serialize");
-                        let ret_write = async move {
-                            half_write
-                                .write_all(format!("{}\n", serialized).as_bytes()).await
-                                .expect("should have sent");
-                            half_write
-                        }.await;
-
-                        *write = Some(ret_write);
-                    }
-                } else {
-                    eprintln!("No se pudo obtener el lock de lectura en `active_drivers`");
-                }
-            });
+            self.handle_ride_request_as_lider(msg);
         } else {
             self.handle_ride_request(msg);
         }
-
     }
 
 }
@@ -123,20 +101,7 @@ impl Driver {
         // Remove the leader port from the list of drivers
         drivers_ports.remove(LIDER_PORT_IDX);
 
-        // Initialization of the leader
-        if *is_leader.read().unwrap() {
-            /// Connect to the other drivers and save connections
-            /// TODO: Habria que modularizar esto y moverlo a un diferente archivo
-            for driver_port in drivers_ports.iter() {
-                let stream = TcpStream::connect(format!("127.0.0.1:{}", driver_port)).await?;
-                let (_, write_half) = split(stream);
-                active_drivers.insert(*driver_port, Some(write_half));
-            }
-        }
-
-        else {
-            // TODO funcionalidad del driver que no es lider
-        }
+        init::init_driver(&mut active_drivers, drivers_ports, should_be_leader).await?;
 
         let active_drivers_arc = Arc::new(RwLock::new(active_drivers));
 
@@ -165,6 +130,36 @@ impl Driver {
     /// Handles the ride request from the leader
     pub fn handle_ride_request(&self, msg: Coordinates) {
         /// TODO
-        print!("Ride request received by diver 6001: {:?}/n", msg);
+        println!("Ride request received by diver 6001: {:?}", msg);
+    }
+
+    pub fn handle_ride_request_as_lider(&self, msg: Coordinates) {
+
+        let active_drivers_clone = Arc::clone(&self.active_drivers);
+        let msg_clone = msg.clone();
+
+        // TODO: VER SI SE PUEDE MODULARIZAR ESTO DE ALGUNA MANERA
+        // Otro lugar que se encarge de los mensajes?
+        actix::spawn(async move {
+            if let Ok(mut active_drivers_clone) = active_drivers_clone.write() {
+                for (id, write) in active_drivers_clone.iter_mut() {
+                    let mut half_write = write.take()
+                        .expect("No debería poder llegar otro mensaje antes de que vuelva por usar AtomicResponse");
+
+                    let msg_type = MessageType::Coordinates(msg_clone);
+                    let serialized = serde_json::to_string(&msg_type).expect("should serialize");
+                    let ret_write = async move {
+                        half_write
+                            .write_all(format!("{}\n", serialized).as_bytes()).await
+                            .expect("should have sent");
+                        half_write
+                    }.await;
+
+                    *write = Some(ret_write);
+                }
+            } else {
+                eprintln!("No se pudo obtener el lock de lectura en `active_drivers`");
+            }
+        });
     }
 }
