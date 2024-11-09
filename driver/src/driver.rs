@@ -10,10 +10,11 @@ use serde::{Serialize, Deserialize};
 
 use crate::init;
 
-/// Coordinates struct, ver como se puede importar desde otro archivo, esto esta en utils.rs\
+/// RideRequest struct, ver como se puede importar desde otro archivo, esto esta en utils.rs\
 #[derive(Serialize, Deserialize, Message, Debug, Clone, Copy)]
 #[rtype(result = "()")]
-pub struct Coordinates {
+pub struct RideRequest {
+    pub id: u16,
     pub x_origin: u16,
     pub y_origin: u16,
     pub x_dest: u16,
@@ -24,7 +25,7 @@ pub struct Coordinates {
 #[serde(tag = "message_type")]
 /// enum Message used to deserialize
 pub enum MessageType {
-    Coordinates(Coordinates),
+    RideRequest(RideRequest),
     // TODO: Add more message types, StatusUpdate is useless for now.
     StatusUpdate { status: String },
 }
@@ -46,6 +47,8 @@ pub struct Driver {
     pub active_drivers: Arc<RwLock<HashMap<u16, Option<WriteHalf<TcpStream>>>>>,
     /// States of the driver
     pub state: Sates,
+    /// Pending rides
+    pub pending_rides: Arc<RwLock<HashMap<u16, RideRequest>>>,
 }
 
 impl Actor for Driver {
@@ -59,7 +62,7 @@ impl StreamHandler<Result<String, io::Error>> for Driver {
         if let Ok(line) = read {
             let message: MessageType = serde_json::from_str(&line).expect("Failed to deserialize message");
             match message {
-                MessageType::Coordinates(coords)=> {
+                MessageType::RideRequest(coords)=> {
                     ctx.address().do_send(coords);
                 }
 
@@ -74,10 +77,10 @@ impl StreamHandler<Result<String, io::Error>> for Driver {
 }
 
 
-impl Handler<Coordinates> for Driver {
+impl Handler<RideRequest> for Driver {
     type Result = ();
 
-    fn handle(&mut self, msg: Coordinates, _ctx: &mut Self::Context) -> Self::Result {
+    fn handle(&mut self, msg: RideRequest, _ctx: &mut Self::Context) -> Self::Result {
         let is_leader = *self.is_leader.read().unwrap();
         if is_leader {
             self.handle_ride_request_as_lider(msg);
@@ -97,6 +100,7 @@ impl Driver {
         let should_be_leader = port == drivers_ports[LIDER_PORT_IDX];
         let is_leader = Arc::new(RwLock::new(should_be_leader));
         let mut active_drivers: HashMap<u16, Option<WriteHalf<TcpStream>>> = HashMap::new();
+        let pending_rides: Arc::<RwLock<HashMap<u16, RideRequest>>> = Arc::new(RwLock::new(HashMap::new()));
 
         // Remove the leader port from the list of drivers
         drivers_ports.remove(LIDER_PORT_IDX);
@@ -121,6 +125,7 @@ impl Driver {
                     is_leader: is_leader.clone(),
                     active_drivers: active_drivers_arc.clone(),
                     state: Sates::Idle,
+                    pending_rides: pending_rides.clone(),
                 }
             });
         }
@@ -128,12 +133,12 @@ impl Driver {
     }
 
     /// Handles the ride request from the leader
-    pub fn handle_ride_request(&self, msg: Coordinates) {
+    pub fn handle_ride_request(&self, msg: RideRequest) {
         /// TODO
         println!("Ride request received by diver 6001: {:?}", msg);
     }
 
-    pub fn handle_ride_request_as_lider(&self, msg: Coordinates) {
+    pub fn handle_ride_request_as_lider(&self, msg: RideRequest) {
 
         let active_drivers_clone = Arc::clone(&self.active_drivers);
         let msg_clone = msg.clone();
@@ -146,7 +151,7 @@ impl Driver {
                     let mut half_write = write.take()
                         .expect("No debería poder llegar otro mensaje antes de que vuelva por usar AtomicResponse");
 
-                    let msg_type = MessageType::Coordinates(msg_clone);
+                    let msg_type = MessageType::RideRequest(msg_clone);
                     let serialized = serde_json::to_string(&msg_type).expect("should serialize");
                     let ret_write = async move {
                         half_write
