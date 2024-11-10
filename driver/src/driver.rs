@@ -4,7 +4,7 @@ use std::sync::{Arc, RwLock};
 use actix::{Actor, AsyncContext, Context, Handler, Message, StreamHandler};
 use actix_async_handler::async_handler;
 use rand::Rng;
-use tokio::io::{split, AsyncBufReadExt, BufReader, AsyncWriteExt, WriteHalf, AsyncReadExt};
+use tokio::io::{split, AsyncBufReadExt, BufReader, AsyncWriteExt, WriteHalf, AsyncReadExt, ReadHalf};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_stream::wrappers::LinesStream;
 use serde::{Serialize, Deserialize};
@@ -53,13 +53,13 @@ pub struct Driver {
     /// Leader port
     pub leader_port: Arc<RwLock<u16>>,
     /// The connections to the drivers
-    pub active_drivers: Arc<RwLock<HashMap<u16, Option<WriteHalf<TcpStream>>>>>,
+    pub active_drivers: Arc<RwLock<HashMap<u16, (Option<ReadHalf<TcpStream>>, Option<WriteHalf<TcpStream>>)>>>,
     /// States of the driver
     pub state: Sates,
     /// Pending rides
     pub pending_rides: Arc<RwLock<HashMap<u16, RideRequest>>>,
-    /// Connection to the leader
-    pub leader_write_half: Arc<RwLock<Option<WriteHalf<TcpStream>>>>,
+    /// Connection to the leader or the Passenger
+    pub write_half: Arc<RwLock<Option<WriteHalf<TcpStream>>>>,
 }
 
 impl Actor for Driver {
@@ -118,9 +118,9 @@ impl Driver {
         let should_be_leader = port == drivers_ports[LIDER_PORT_IDX];
         let is_leader = Arc::new(RwLock::new(should_be_leader));
         let leader_port = Arc::new(RwLock::new(drivers_ports[LIDER_PORT_IDX].clone()));
-        let mut active_drivers: HashMap<u16, Option<WriteHalf<TcpStream>>> = HashMap::new();
+        let mut active_drivers: HashMap<u16, (Option<ReadHalf<TcpStream>>, Option<WriteHalf<TcpStream>>)> = HashMap::new();
         let pending_rides: Arc::<RwLock<HashMap<u16, RideRequest>>> = Arc::new(RwLock::new(HashMap::new()));
-        let mut write_half_to_leader: Arc<RwLock<Option<WriteHalf<TcpStream>>>> = Arc::new(RwLock::new(None));
+        let mut write_half: Arc<RwLock<Option<WriteHalf<TcpStream>>>> = Arc::new(RwLock::new(None));
 
         // Remove the leader port from the list of drivers
         drivers_ports.remove(LIDER_PORT_IDX);
@@ -136,21 +136,25 @@ impl Driver {
 
             println!("CONNECTION ACCEPTED\n");
 
-            /// Que es lo que pasa aca...
-            /// Si bien el lider realiza la conexion con el driver, el lider no tiene el stream del driver asociado a su actor
-            /// por lo que no puede leer al driver, pero el driver si puede leer al lider (porque tiene el stream asociado)
-            /// Por lo que el lider puede enviar mensajes al driver, pero el driver no puede enviar mensajes al lider
-            /// Entonces esta es la solucion que encontre, hay que ver si es aceptable esto...
-            /// TODO: pasar esto al init
-            if !should_be_leader {
-                let stream = TcpStream::connect(format!("127.0.0.1:{}", 6000)).await?;
-                let (_, write_half) = split(stream);
-                write_half_to_leader = Arc::new(RwLock::new(Some(write_half)));
-            }
-
             Driver::create(|ctx| {
-                let (read, _write_half) = split(stream);
-                Driver::add_stream(LinesStream::new(BufReader::new(read).lines()), ctx);
+                let (read_passenger, _write_half) = split(stream);
+                Driver::add_stream(LinesStream::new(BufReader::new(read_passenger).lines()), ctx);
+
+                /// Write half sera conexion hacia el Passenger si es Leader, de lo contrario sera hacia el Leader (dado que soy un driver)
+                write_half.write().unwrap().replace(_write_half);
+
+                /// asocio todos los reads de los drivers al lider
+                if should_be_leader {
+                    let mut active_drivers = active_drivers_arc.write().unwrap();
+
+                    for (id, (read, _)) in active_drivers.iter_mut() {
+                        if let Some(read_half) = read.take() {
+                            Driver::add_stream(LinesStream::new(BufReader::new(read_half).lines()), ctx);
+                        } else {
+                            eprintln!("Driver {} no tiene un stream de lectura disponible", id);
+                        }
+                    }
+                }
                 Driver {
                     id: port,
                     is_leader: is_leader.clone(),
@@ -158,7 +162,7 @@ impl Driver {
                     active_drivers: active_drivers_arc.clone(),
                     state: Sates::Idle,
                     pending_rides: pending_rides.clone(),
-                    leader_write_half: write_half_to_leader.clone(),
+                    write_half: write_half.clone(),
                 }
             });
         }
@@ -171,12 +175,6 @@ impl Driver {
     pub fn handle_ride_request(&self, msg: RideRequest) -> Result<(), io::Error> {
         let probability = 0.9;
         let result = boolean_with_probability(probability);
-
-        /// Esto es asi, yo como driver no tengo conexion tdoavia con el lider (el si me envia mensajes)
-        /// Por lo que para responde que quiero tomar el viaje tengo que conectarme por unica vez
-        /// Yo al principio me conecto pero no guardo la conexion de escritura, igualmente el lider no podria escucharme
-        /// dado que tiene el stream del pasajero asociado (no pude asociar mas de un stream a un solo actor)
-        /// En fin, hay que preguntar si esto es algo aceptabe, o si debemos volver a algo1
 
         if result {
             println!("Driver {} accepted the ride request", self.id);
@@ -205,7 +203,7 @@ impl Driver {
         // Otro lugar que se encarge de los mensajes?
         actix::spawn(async move {
             if let Ok(mut active_drivers_clone) = active_drivers_clone.write() {
-                for (id, write) in active_drivers_clone.iter_mut() {
+                for (id, (_, write)) in active_drivers_clone.iter_mut() {
                     let mut half_write = write.take()
                         .expect("No debería poder llegar otro mensaje antes de que vuelva por usar AtomicResponse");
 
@@ -231,7 +229,7 @@ impl Driver {
     /// * `msg` - The message containing the ride request
     fn accept_ride_request(&self, msg: RideRequest) {
         // Clonar el Arc<RwLock<Option<WriteHalf<TcpStream>>>>
-        let leader_write_half = Arc::clone(&self.leader_write_half);
+        let write_half = Arc::clone(&self.write_half);
 
         // Crear el mensaje de respuesta
         let response = RideRequestResponse {
@@ -252,7 +250,7 @@ impl Driver {
 
         // Enviar el mensaje de manera asíncrona
         actix::spawn(async move {
-            let mut write_guard = leader_write_half.write().unwrap();
+            let mut write_guard = write_half.write().unwrap();
 
             if let Some(write_half) = write_guard.as_mut() {
                 if let Err(e) = write_half.write_all(format!("{}\n", serialized).as_bytes()).await {
