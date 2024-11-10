@@ -3,6 +3,7 @@ use actix_rt::System;
 use crate::driver::Driver;
 
 mod driver;
+mod init;
 
 /// Receives a port and creates driver actor
 #[actix_rt::main]
@@ -11,7 +12,7 @@ async fn main() -> std::io::Result<()> {
     let port = args[1].parse::<u16>().unwrap();
 
     // hardcoded for now
-    let drivers_ports : Vec<u16> = vec![6000, 6001, 6002, 6003, 6004];
+    let drivers_ports : Vec<u16> = vec![6000, 6001];
 
     Driver::start(port, drivers_ports).await?;
 

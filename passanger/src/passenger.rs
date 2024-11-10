@@ -7,7 +7,7 @@ use tokio::io::{split, AsyncBufReadExt, AsyncWriteExt, BufReader, WriteHalf};
 use tokio::net::TcpStream;
 use tokio::sync::oneshot::Sender;
 use tokio_stream::wrappers::LinesStream;
-use crate::utils::Coordinates;
+use crate::utils::RideRequest;
 const LEADER_PORT: u16 = 6000;
 
 
@@ -15,7 +15,7 @@ const LEADER_PORT: u16 = 6000;
 #[serde(tag = "message_type")]
 /// enum Message used to deserialize
 enum MessageType {
-    Coordinates(Coordinates),
+    RideRequest(RideRequest),
     StatusUpdate { status: String },
 }
 
@@ -28,7 +28,7 @@ pub struct Passenger {
     /// The actor that sends messages to the leader
     tcp_sender: Addr<TcpSender>,
     /// The list of rides (coordinates) that the passenger has to go to
-    rides: Vec<Coordinates>,
+    rides: Vec<RideRequest>,
     /// The channel to send a completion signal to the main function
     completion_signal: Option<Sender<()>>,
 }
@@ -48,11 +48,11 @@ impl StreamHandler<Result<String, io::Error>> for Passenger {
     }
 }
 
-/// Handles Coordinates messages coming from main and sends them to the TcpSender actor
-impl Handler<Coordinates> for Passenger {
+/// Handles RideRequest messages coming from main and sends them to the TcpSender actor
+impl Handler<RideRequest> for Passenger {
     type Result = ();
 
-    fn handle(&mut self, msg: Coordinates, _ctx: &mut Self::Context) -> Self::Result {
+    fn handle(&mut self, msg: RideRequest, _ctx: &mut Self::Context) -> Self::Result {
         println!("Mensaje recibido por el Passenger: {:?}", msg);
         self.tcp_sender.try_send(msg).unwrap()
     }
@@ -64,7 +64,7 @@ impl Passenger {
     /// * `port` - The port of the passenger
     /// * `rides` - The list of rides (coordinates) that the passenger has to go to
     /// * `tx` - The channel to send a completion signal to the main function
-    pub async fn start(port: u16, rides: Vec<Coordinates>, tx: Sender<()>) -> Result<(), io::Error> {
+    pub async fn start(port: u16, rides: Vec<RideRequest>, tx: Sender<()>) -> Result<(), io::Error> {
         let stream = TcpStream::connect(format!("127.0.0.1:{}", crate::LEADER_PORT)).await?;
         let rides_clone = rides.clone();
         let addr = Passenger::create(|ctx| {
@@ -83,7 +83,7 @@ impl Passenger {
         Ok(())
     }
 
-    pub fn new(port: u16, tcp_sender: Addr<TcpSender>, coordinates: Vec<Coordinates>, tx: Sender<()>) -> Self {
+    pub fn new(port: u16, tcp_sender: Addr<TcpSender>, coordinates: Vec<RideRequest>, tx: Sender<()>) -> Self {
         Passenger {
             id: port,
             leader_port: LEADER_PORT,
@@ -111,16 +111,16 @@ impl TcpSender {
     }
 }
 
-/// Handles Coordinates messages coming from the Passenger actor and sends them to the leader
+/// Handles RideRequest messages coming from the Passenger actor and sends them to the leader
 #[async_handler]
-impl Handler<Coordinates> for TcpSender {
+impl Handler<RideRequest> for TcpSender {
     type Result = ();
 
-    async fn handle(&mut self, msg: Coordinates, ctx: &mut Self::Context) -> Self::Result {
+    async fn handle(&mut self, msg: RideRequest, ctx: &mut Self::Context) -> Self::Result {
         let mut write = self.write.take()
             .expect("No debería poder llegar otro mensaje antes de que vuelva por usar AtomicResponse");
 
-        let msg_type = MessageType::Coordinates(msg);
+        let msg_type = MessageType::RideRequest(msg);
         let serialized = serde_json::to_string(&msg_type).expect("should serialize");
         let ret_write = async move {
             write
