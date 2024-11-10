@@ -8,7 +8,6 @@ use tokio::io::{split, AsyncBufReadExt, BufReader, AsyncWriteExt, WriteHalf, Asy
 use tokio::net::{TcpListener, TcpStream};
 use tokio_stream::wrappers::LinesStream;
 use serde::{Serialize, Deserialize};
-
 use crate::init;
 
 /// RideRequest struct, ver como se puede importar desde otro archivo, esto esta en utils.rs\
@@ -22,13 +21,20 @@ pub struct RideRequest {
     pub y_dest: u16,
 }
 
+#[derive(Serialize, Deserialize, Message, Debug, Clone, Copy)]
+#[rtype(result = "()")]
+pub struct RideRequestResponse {
+    pub id: u16,
+    pub driver_id: u16,
+    pub status: bool,
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(tag = "message_type")]
 /// enum Message used to deserialize
 pub enum MessageType {
     RideRequest(RideRequest),
-    // TODO: Add more message types, StatusUpdate is useless for now.
-    StatusUpdate { status: String },
+    RideRequestResponse(RideRequestResponse),
 }
 
 pub enum Sates {
@@ -44,12 +50,16 @@ pub struct Driver {
     pub id: u16,
     /// Whether the driver is the leader
     pub is_leader: Arc<RwLock<bool>>,
+    /// Leader port
+    pub leader_port: Arc<RwLock<u16>>,
     /// The connections to the drivers
     pub active_drivers: Arc<RwLock<HashMap<u16, Option<WriteHalf<TcpStream>>>>>,
     /// States of the driver
     pub state: Sates,
     /// Pending rides
     pub pending_rides: Arc<RwLock<HashMap<u16, RideRequest>>>,
+    /// Connection to the leader
+    pub leader_write_half: Arc<RwLock<Option<WriteHalf<TcpStream>>>>,
 }
 
 impl Actor for Driver {
@@ -67,8 +77,8 @@ impl StreamHandler<Result<String, io::Error>> for Driver {
                     ctx.address().do_send(coords);
                 }
 
-                MessageType::StatusUpdate { status } => {
-                    println!("Status: {}", status);
+                MessageType::RideRequestResponse (ride_resp) => {
+                    ctx.address().do_send(ride_resp);
                 }
             }
         } else {
@@ -77,20 +87,27 @@ impl StreamHandler<Result<String, io::Error>> for Driver {
     }
 }
 
-
 impl Handler<RideRequest> for Driver {
     type Result = ();
 
     fn handle(&mut self, msg: RideRequest, _ctx: &mut Self::Context) -> Self::Result {
         let is_leader = *self.is_leader.read().unwrap();
         if is_leader {
-            self.handle_ride_request_as_lider(msg);
+            self.handle_ride_request_as_leader(msg);
         } else {
-            self.handle_ride_request(msg);
+            self.handle_ride_request(msg).expect("Error handling ride request");
         }
     }
-
 }
+
+impl Handler<RideRequestResponse> for Driver {
+    type Result = ();
+
+    fn handle(&mut self, msg: RideRequestResponse, _ctx: &mut Self::Context) -> Self::Result {
+        println!("RECIBI RIDE REQUEST RESPONSE");
+    }
+}
+
 
 impl Driver {
     /// Creates the actor and starts listening for incoming passengers
@@ -100,8 +117,10 @@ impl Driver {
     pub async fn start(port: u16, mut drivers_ports: Vec<u16>) -> Result<(), io::Error> {
         let should_be_leader = port == drivers_ports[LIDER_PORT_IDX];
         let is_leader = Arc::new(RwLock::new(should_be_leader));
+        let leader_port = Arc::new(RwLock::new(drivers_ports[LIDER_PORT_IDX].clone()));
         let mut active_drivers: HashMap<u16, Option<WriteHalf<TcpStream>>> = HashMap::new();
         let pending_rides: Arc::<RwLock<HashMap<u16, RideRequest>>> = Arc::new(RwLock::new(HashMap::new()));
+        let mut write_half_to_leader: Arc<RwLock<Option<WriteHalf<TcpStream>>>> = Arc::new(RwLock::new(None));
 
         // Remove the leader port from the list of drivers
         drivers_ports.remove(LIDER_PORT_IDX);
@@ -117,31 +136,55 @@ impl Driver {
 
             println!("CONNECTION ACCEPTED\n");
 
-             Driver::create(|ctx| {
+            /// Que es lo que pasa aca...
+            /// Si bien el lider realiza la conexion con el driver, el lider no tiene el stream del driver asociado a su actor
+            /// por lo que no puede leer al driver, pero el driver si puede leer al lider (porque tiene el stream asociado)
+            /// Por lo que el lider puede enviar mensajes al driver, pero el driver no puede enviar mensajes al lider
+            /// Entonces esta es la solucion que encontre, hay que ver si es aceptable esto...
+            /// TODO: pasar esto al init
+            if !should_be_leader {
+                let stream = TcpStream::connect(format!("127.0.0.1:{}", 6000)).await?;
+                let (_, write_half) = split(stream);
+                write_half_to_leader = Arc::new(RwLock::new(Some(write_half)));
+            }
+
+            Driver::create(|ctx| {
                 let (read, _write_half) = split(stream);
                 Driver::add_stream(LinesStream::new(BufReader::new(read).lines()), ctx);
-                //let write = Some(write_half);
                 Driver {
                     id: port,
                     is_leader: is_leader.clone(),
+                    leader_port: leader_port.clone(),
                     active_drivers: active_drivers_arc.clone(),
                     state: Sates::Idle,
                     pending_rides: pending_rides.clone(),
+                    leader_write_half: write_half_to_leader.clone(),
                 }
             });
         }
         Ok(())
     }
 
-    /// Handles the ride request from the leader
-    pub fn handle_ride_request(&self, msg: RideRequest) {
-        let probability = 0.1;
+    /// Handles the ride request from the leader as a driver
+    /// # Arguments
+    /// * `msg` - The message containing the ride request
+    pub fn handle_ride_request(&self, msg: RideRequest) -> Result<(), io::Error> {
+        let probability = 0.9;
         let result = boolean_with_probability(probability);
+
+        /// Esto es asi, yo como driver no tengo conexion tdoavia con el lider (el si me envia mensajes)
+        /// Por lo que para responde que quiero tomar el viaje tengo que conectarme por unica vez
+        /// Yo al principio me conecto pero no guardo la conexion de escritura, igualmente el lider no podria escucharme
+        /// dado que tiene el stream del pasajero asociado (no pude asociar mas de un stream a un solo actor)
+        /// En fin, hay que preguntar si esto es algo aceptabe, o si debemos volver a algo1
+
         if result {
             println!("Driver {} accepted the ride request", self.id);
+            self.accept_ride_request(msg);
         } else {
             println!("Driver {} rejected the ride request", self.id);
         }
+        Ok(())
 
     }
 
@@ -149,7 +192,7 @@ impl Driver {
     /// TODO: LOGICA PARA VER A QUIEN SE LE DAN LOS VIAJES, ACA SE ESTA MANDANDO A TODOS
     /// # Arguments
     /// * `msg` - The message containing the ride request
-    pub fn handle_ride_request_as_lider(&mut self, msg: RideRequest) {
+    pub fn handle_ride_request_as_leader(&mut self, msg: RideRequest) {
 
         let active_drivers_clone = Arc::clone(&self.active_drivers);
         let msg_clone = msg.clone();
@@ -182,7 +225,47 @@ impl Driver {
             }
         });
     }
+
+    /// Accepts the ride request and sends the response to the leader
+    /// # Arguments
+    /// * `msg` - The message containing the ride request
+    fn accept_ride_request(&self, msg: RideRequest) {
+        // Clonar el Arc<RwLock<Option<WriteHalf<TcpStream>>>>
+        let leader_write_half = Arc::clone(&self.leader_write_half);
+
+        // Crear el mensaje de respuesta
+        let response = RideRequestResponse {
+            id: msg.id,
+            driver_id: self.id,
+            status: true,
+        };
+
+        // Serializar el mensaje en JSON
+        let msg_type = MessageType::RideRequestResponse(response);
+        let serialized = match serde_json::to_string(&msg_type) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("Error serializando el mensaje: {:?}", e);
+                return;
+            }
+        };
+
+        // Enviar el mensaje de manera asíncrona
+        actix::spawn(async move {
+            let mut write_guard = leader_write_half.write().unwrap();
+
+            if let Some(write_half) = write_guard.as_mut() {
+                if let Err(e) = write_half.write_all(format!("{}\n", serialized).as_bytes()).await {
+                    eprintln!("Error al enviar el mensaje: {:?}", e);
+                }
+            } else {
+                eprintln!("No se pudo enviar el mensaje: el líder no tiene una conexión activa");
+            }
+        });
+    }
 }
+
+
 
 pub fn boolean_with_probability(probability: f64) -> bool {
     let mut rng = rand::thread_rng();
