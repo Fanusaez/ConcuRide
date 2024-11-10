@@ -3,6 +3,7 @@ use std::io;
 use std::sync::{Arc, RwLock};
 use actix::{Actor, AsyncContext, Context, Handler, Message, StreamHandler};
 use actix_async_handler::async_handler;
+use futures::future::MaybeDone::Future;
 use rand::Rng;
 use tokio::io::{split, AsyncBufReadExt, BufReader, AsyncWriteExt, WriteHalf, AsyncReadExt, ReadHalf};
 use tokio::net::{TcpListener, TcpStream};
@@ -104,7 +105,7 @@ impl Handler<RideRequestResponse> for Driver {
     type Result = ();
 
     fn handle(&mut self, msg: RideRequestResponse, _ctx: &mut Self::Context) -> Self::Result {
-        println!("RECIBI RIDE REQUEST RESPONSE");
+        println!("Lider {} received the response for the ride request from driver {}", self.id, msg.driver_id);
     }
 }
 
@@ -121,6 +122,7 @@ impl Driver {
         let mut active_drivers: HashMap<u16, (Option<ReadHalf<TcpStream>>, Option<WriteHalf<TcpStream>>)> = HashMap::new();
         let pending_rides: Arc::<RwLock<HashMap<u16, RideRequest>>> = Arc::new(RwLock::new(HashMap::new()));
         let mut write_half: Arc<RwLock<Option<WriteHalf<TcpStream>>>> = Arc::new(RwLock::new(None));
+        let mut streams_added = false;
 
         // Remove the leader port from the list of drivers
         drivers_ports.remove(LIDER_PORT_IDX);
@@ -137,14 +139,14 @@ impl Driver {
             println!("CONNECTION ACCEPTED\n");
 
             Driver::create(|ctx| {
-                let (read_passenger, _write_half) = split(stream);
-                Driver::add_stream(LinesStream::new(BufReader::new(read_passenger).lines()), ctx);
+                let (read_half, _write_half) = split(stream);
+                Driver::add_stream(LinesStream::new(BufReader::new(read_half).lines()), ctx);
 
                 /// Write half sera conexion hacia el Passenger si es Leader, de lo contrario sera hacia el Leader (dado que soy un driver)
                 write_half.write().unwrap().replace(_write_half);
 
                 /// asocio todos los reads de los drivers al lider
-                if should_be_leader {
+                if should_be_leader && !streams_added {
                     let mut active_drivers = active_drivers_arc.write().unwrap();
 
                     for (id, (read, _)) in active_drivers.iter_mut() {
@@ -154,6 +156,7 @@ impl Driver {
                             eprintln!("Driver {} no tiene un stream de lectura disponible", id);
                         }
                     }
+                    streams_added = true;
                 }
                 Driver {
                     id: port,
