@@ -67,6 +67,8 @@ const LIDER_PORT_IDX : usize = 0;
 pub struct Driver {
     /// The port of the driver
     pub id: u16,
+    /// The driver's position
+    pub position: (i32, i32),
     /// Whether the driver is the leader
     pub is_leader: Arc<RwLock<bool>>,
     /// Leader port
@@ -79,6 +81,10 @@ pub struct Driver {
     pub pending_rides: Arc<RwLock<HashMap<u16, RideRequest>>>,
     /// Connection to the leader or the Passenger
     pub write_half: Arc<RwLock<Option<WriteHalf<TcpStream>>>>,
+    /// Last known position of the driver (port, (x, y))
+    pub drivers_last_position: Arc::<RwLock<HashMap<u16, (i32, i32)>>>,
+    /// Passenger last DriveRequest and the drivers who have been offered the ride
+    pub ride_and_offers: Arc::<RwLock<HashMap<u16, Vec<u16>>>>,
 }
 
 impl Actor for Driver {
@@ -116,6 +122,9 @@ impl Handler<RideRequest> for Driver {
     /// Handles the ride request message depending on whether the driver is the leader or not.
     fn handle(&mut self, msg: RideRequest, _ctx: &mut Self::Context) -> Self::Result {
         let is_leader = *self.is_leader.read().unwrap();
+
+        /// Aca iria el tema de la app de pagos
+
         if is_leader {
             self.handle_ride_request_as_leader(msg).expect("Error handling ride request as leader");
         } else {
@@ -152,6 +161,8 @@ impl Driver {
         let mut active_drivers: HashMap<u16, (Option<ReadHalf<TcpStream>>, Option<WriteHalf<TcpStream>>)> = HashMap::new();
         let pending_rides: Arc::<RwLock<HashMap<u16, RideRequest>>> = Arc::new(RwLock::new(HashMap::new()));
         let mut write_half: Arc<RwLock<Option<WriteHalf<TcpStream>>>> = Arc::new(RwLock::new(None));
+        let drivers_last_position: Arc::<RwLock<HashMap<u16, (i32, i32)>>> = Arc::new(RwLock::new(HashMap::new()));
+        let ride_and_offers: Arc::<RwLock<HashMap<u16, Vec<u16>>>> = Arc::new(RwLock::new(HashMap::new()));
         let mut streams_added = false;
 
         // Remove the leader port from the list of drivers
@@ -190,12 +201,15 @@ impl Driver {
                 }
                 Driver {
                     id: port,
+                    position: (0, 0), // Arrancan en el origen por comodidad, ver despues que onda
                     is_leader: is_leader.clone(),
                     leader_port: leader_port.clone(),
                     active_drivers: active_drivers_arc.clone(),
                     state: Sates::Idle,
                     pending_rides: pending_rides.clone(),
                     write_half: write_half.clone(),
+                    drivers_last_position: drivers_last_position.clone(),
+                    ride_and_offers: ride_and_offers.clone(),
                 }
             });
         }
