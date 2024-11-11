@@ -91,12 +91,13 @@ impl StreamHandler<Result<String, io::Error>> for Driver {
 impl Handler<RideRequest> for Driver {
     type Result = ();
 
+    /// Handles the ride request message depending on whether the driver is the leader or not.
     fn handle(&mut self, msg: RideRequest, _ctx: &mut Self::Context) -> Self::Result {
         let is_leader = *self.is_leader.read().unwrap();
         if is_leader {
-            self.handle_ride_request_as_leader(msg);
+            self.handle_ride_request_as_leader(msg).expect("Error handling ride request as leader");
         } else {
-            self.handle_ride_request(msg).expect("Error handling ride request");
+            self.handle_ride_request(msg).expect("Error handling ride request as driver");
         }
     }
 }
@@ -176,12 +177,12 @@ impl Driver {
     /// # Arguments
     /// * `msg` - The message containing the ride request
     pub fn handle_ride_request(&self, msg: RideRequest) -> Result<(), io::Error> {
-        let probability = 0.9;
+        let probability = 0.99;
         let result = boolean_with_probability(probability);
 
         if result {
             println!("Driver {} accepted the ride request", self.id);
-            self.accept_ride_request(msg);
+            self.accept_ride_request(msg)?;
         } else {
             println!("Driver {} rejected the ride request", self.id);
         }
@@ -193,14 +194,22 @@ impl Driver {
     /// TODO: LOGICA PARA VER A QUIEN SE LE DAN LOS VIAJES, ACA SE ESTA MANDANDO A TODOS
     /// # Arguments
     /// * `msg` - The message containing the ride request
-    pub fn handle_ride_request_as_leader(&mut self, msg: RideRequest) {
+    pub fn handle_ride_request_as_leader(&mut self, msg: RideRequest) -> Result<(), io::Error>{
 
         let active_drivers_clone = Arc::clone(&self.active_drivers);
         let msg_clone = msg.clone();
 
         // Lo pongo el pending_rides hasta que alguien acepte el viaje
-        let mut pending_rides = self.pending_rides.write().unwrap();
-        pending_rides.insert(msg.id.clone(), msg.clone());
+        let mut pending_rides = self.pending_rides.write();
+        match pending_rides {
+            Ok(mut pending_rides) => {
+                pending_rides.insert(msg.id.clone(), msg.clone());
+            },
+            Err(e) => {
+                eprintln!("Error al obtener el lock de escritura en `pending_rides`: {:?}", e);
+                return Err(io::Error::new(io::ErrorKind::Other, "Error al obtener el lock de escritura en `pending_rides`"));
+            }
+        }
 
         // TODO: VER SI SE PUEDE MODULARIZAR ESTO DE ALGUNA MANERA
         // Otro lugar que se encarge de los mensajes?
@@ -225,12 +234,13 @@ impl Driver {
                 eprintln!("No se pudo obtener el lock de lectura en `active_drivers`");
             }
         });
+        Ok(())
     }
 
     /// Accepts the ride request and sends the response to the leader
     /// # Arguments
     /// * `msg` - The message containing the ride request
-    fn accept_ride_request(&self, msg: RideRequest) {
+    fn accept_ride_request(&self, msg: RideRequest) -> Result<(), io::Error>{
         // Clonar el Arc<RwLock<Option<WriteHalf<TcpStream>>>>
         let write_half = Arc::clone(&self.write_half);
 
@@ -243,13 +253,7 @@ impl Driver {
 
         // Serializar el mensaje en JSON
         let msg_type = MessageType::RideRequestResponse(response);
-        let serialized = match serde_json::to_string(&msg_type) {
-            Ok(s) => s,
-            Err(e) => {
-                eprintln!("Error serializando el mensaje: {:?}", e);
-                return;
-            }
-        };
+        let serialized = serde_json::to_string(&msg_type)?;
 
         // Enviar el mensaje de manera asíncrona
         actix::spawn(async move {
@@ -263,6 +267,7 @@ impl Driver {
                 eprintln!("No se pudo enviar el mensaje: el líder no tiene una conexión activa");
             }
         });
+        Ok(())
     }
 }
 
