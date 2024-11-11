@@ -1,3 +1,4 @@
+use std::cmp::PartialEq;
 use std::collections::HashMap;
 use std::io;
 use std::sync::{Arc, RwLock};
@@ -24,10 +25,16 @@ pub struct RideRequest {
 
 #[derive(Serialize, Deserialize, Message, Debug, Clone, Copy)]
 #[rtype(result = "()")]
-pub struct RideRequestResponse {
-    pub id: u16,
+pub struct AcceptRide {
+    pub passenger_id: u16,
     pub driver_id: u16,
-    pub status: bool,
+}
+
+#[derive(Serialize, Deserialize, Message, Debug, Clone, Copy)]
+#[rtype(result = "()")]
+pub struct DeclineRide {
+    pub passenger_id: u16,
+    pub driver_id: u16,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -35,12 +42,23 @@ pub struct RideRequestResponse {
 /// enum Message used to deserialize
 pub enum MessageType {
     RideRequest(RideRequest),
-    RideRequestResponse(RideRequestResponse),
+    AcceptRide(AcceptRide),
+    DeclineRide(DeclineRide),
 }
 
 pub enum Sates {
     Driving,
     Idle,
+}
+
+impl PartialEq for Sates {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Sates::Driving, Sates::Driving) => true,
+            (Sates::Idle, Sates::Idle) => true,
+            _ => false,
+        }
+    }
 }
 
 
@@ -78,8 +96,12 @@ impl StreamHandler<Result<String, io::Error>> for Driver {
                     ctx.address().do_send(coords);
                 }
 
-                MessageType::RideRequestResponse (ride_resp) => {
-                    ctx.address().do_send(ride_resp);
+                MessageType::AcceptRide (accept_ride) => {
+                    ctx.address().do_send(accept_ride);
+                }
+
+                MessageType::DeclineRide (decline_ride) => {
+                    ctx.address().do_send(decline_ride);
                 }
             }
         } else {
@@ -102,14 +124,21 @@ impl Handler<RideRequest> for Driver {
     }
 }
 
-impl Handler<RideRequestResponse> for Driver {
+impl Handler<AcceptRide> for Driver {
     type Result = ();
 
-    fn handle(&mut self, msg: RideRequestResponse, _ctx: &mut Self::Context) -> Self::Result {
-        println!("Lider {} received the response for the ride request from driver {}", self.id, msg.driver_id);
+    fn handle(&mut self, msg: AcceptRide, _ctx: &mut Self::Context) -> Self::Result {
+        println!("Lider {} received the accept response for the ride request from driver {}", self.id, msg.driver_id);
     }
 }
 
+impl Handler<DeclineRide> for Driver {
+    type Result = ();
+
+    fn handle(&mut self, msg: DeclineRide, _ctx: &mut Self::Context) -> Self::Result {
+        println!("Lider {} received the declined message for the ride request from driver {}", self.id, msg.driver_id);
+    }
+}
 
 impl Driver {
     /// Creates the actor and starts listening for incoming passengers
@@ -176,14 +205,15 @@ impl Driver {
     /// Handles the ride request from the leader as a driver
     /// # Arguments
     /// * `msg` - The message containing the ride request
-    pub fn handle_ride_request(&self, msg: RideRequest) -> Result<(), io::Error> {
+    pub fn handle_ride_request(&mut self, msg: RideRequest) -> Result<(), io::Error> {
         let probability = 0.99;
         let result = boolean_with_probability(probability);
 
-        if result {
+        if result && self.state == Sates::Idle {
             println!("Driver {} accepted the ride request", self.id);
             self.accept_ride_request(msg)?;
         } else {
+            self.decline_ride_request(msg)?;
             println!("Driver {} rejected the ride request", self.id);
         }
         Ok(())
@@ -215,7 +245,7 @@ impl Driver {
         // Otro lugar que se encarge de los mensajes?
         actix::spawn(async move {
             if let Ok(mut active_drivers_clone) = active_drivers_clone.write() {
-                for (id, (_, write)) in active_drivers_clone.iter_mut() {
+                for (_id, (_, write)) in active_drivers_clone.iter_mut() {
                     let mut half_write = write.take()
                         .expect("No debería poder llegar otro mensaje antes de que vuelva por usar AtomicResponse");
 
@@ -237,25 +267,55 @@ impl Driver {
         Ok(())
     }
 
-    /// Accepts the ride request and sends the response to the leader
+    /// Sends the AcceptRide message to the leader
     /// # Arguments
     /// * `msg` - The message containing the ride request
-    fn accept_ride_request(&self, msg: RideRequest) -> Result<(), io::Error>{
-        // Clonar el Arc<RwLock<Option<WriteHalf<TcpStream>>>>
-        let write_half = Arc::clone(&self.write_half);
+    fn accept_ride_request(&mut self, msg: RideRequest) -> Result<(), io::Error>{
 
         // Crear el mensaje de respuesta
-        let response = RideRequestResponse {
-            id: msg.id,
+        let response = AcceptRide {
+            passenger_id: msg.id,
             driver_id: self.id,
-            status: true,
         };
 
         // Serializar el mensaje en JSON
-        let msg_type = MessageType::RideRequestResponse(response);
-        let serialized = serde_json::to_string(&msg_type)?;
+        let msg_type = MessageType::AcceptRide(response);
+
+        // Cambiar el estado del driver a Driving
+        self.state = Sates::Driving;
 
         // Enviar el mensaje de manera asíncrona
+        self.send_message(msg_type)?;
+
+        Ok(())
+    }
+
+    /// Sends the DeclineRide message to the leader
+    /// # Arguments
+    /// * `msg` - The message containing the ride request
+    fn decline_ride_request(&self, msg: RideRequest) -> Result<(), io::Error> {
+
+        // Crear el mensaje de respuesta
+        let response = DeclineRide {
+            passenger_id: msg.id,
+            driver_id: self.id,
+        };
+
+        // Serializar el mensaje en JSON
+        let msg_type = MessageType::DeclineRide(response);
+
+        // Enviar el mensaje de manera asíncrona
+        self.send_message(msg_type)?;
+
+        Ok(())
+    }
+
+    /// Generic function to send a message to the leader or the passenger
+    fn send_message(&self, message: MessageType) -> Result<(), io::Error> {
+        let write_half = Arc::clone(&self.write_half);
+
+        let serialized = serde_json::to_string(&message)?;
+
         actix::spawn(async move {
             let mut write_guard = write_half.write().unwrap();
 
@@ -264,11 +324,13 @@ impl Driver {
                     eprintln!("Error al enviar el mensaje: {:?}", e);
                 }
             } else {
-                eprintln!("No se pudo enviar el mensaje: el líder no tiene una conexión activa");
+                eprintln!("No se pudo enviar el mensaje: no hay conexión activa");
             }
         });
+
         Ok(())
     }
+
 }
 
 
