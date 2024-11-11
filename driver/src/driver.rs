@@ -159,18 +159,19 @@ impl Driver {
         let is_leader = Arc::new(RwLock::new(should_be_leader));
         let leader_port = Arc::new(RwLock::new(drivers_ports[LIDER_PORT_IDX].clone()));
         let mut active_drivers: HashMap<u16, (Option<ReadHalf<TcpStream>>, Option<WriteHalf<TcpStream>>)> = HashMap::new();
-        let pending_rides: Arc::<RwLock<HashMap<u16, RideRequest>>> = Arc::new(RwLock::new(HashMap::new()));
+        let pending_rides: Arc<RwLock<HashMap<u16, RideRequest>>> = Arc::new(RwLock::new(HashMap::new()));
         let mut write_half: Arc<RwLock<Option<WriteHalf<TcpStream>>>> = Arc::new(RwLock::new(None));
-        let drivers_last_position: Arc::<RwLock<HashMap<u16, (i32, i32)>>> = Arc::new(RwLock::new(HashMap::new()));
+        let mut drivers_last_position: HashMap<u16, (i32, i32)> = HashMap::new();
         let ride_and_offers: Arc::<RwLock<HashMap<u16, Vec<u16>>>> = Arc::new(RwLock::new(HashMap::new()));
         let mut streams_added = false;
 
         // Remove the leader port from the list of drivers
         drivers_ports.remove(LIDER_PORT_IDX);
 
-        init::init_driver(&mut active_drivers, drivers_ports, should_be_leader).await?;
+        init::init_driver(&mut active_drivers, drivers_ports, &mut drivers_last_position, should_be_leader).await?;
 
-        let active_drivers_arc = Arc::new(RwLock::new(active_drivers));
+        let mut active_drivers_arc = Arc::new(RwLock::new(active_drivers));
+        let mut drivers_last_position_arc = Arc::new(RwLock::new(drivers_last_position));
 
         let listener = TcpListener::bind(format!("127.0.0.1:{}", port)).await?;
         println!("WAITING FOR PASSENGERS TO CONNECT(leader) OR ACCEPTING LEADER(drivers)\n");
@@ -208,7 +209,7 @@ impl Driver {
                     state: Sates::Idle,
                     pending_rides: pending_rides.clone(),
                     write_half: write_half.clone(),
-                    drivers_last_position: drivers_last_position.clone(),
+                    drivers_last_position: drivers_last_position_arc.clone(),
                     ride_and_offers: ride_and_offers.clone(),
                 }
             });
@@ -240,9 +241,6 @@ impl Driver {
     /// * `msg` - The message containing the ride request
     pub fn handle_ride_request_as_leader(&mut self, msg: RideRequest) -> Result<(), io::Error>{
 
-        let active_drivers_clone = Arc::clone(&self.active_drivers);
-        let msg_clone = msg.clone();
-
         // Lo pongo el pending_rides hasta que alguien acepte el viaje
         let mut pending_rides = self.pending_rides.write();
         match pending_rides {
@@ -255,31 +253,45 @@ impl Driver {
             }
         }
 
-        // TODO: VER SI SE PUEDE MODULARIZAR ESTO DE ALGUNA MANERA
-        // Otro lugar que se encarge de los mensajes?
+        /// Logica de a quien se le manda el mensaje
+        let driver_id_to_send = self.get_closest_driver(msg);
+
+        let mut active_drivers_clone = Arc::clone(&self.active_drivers);
+        let msg_clone = msg.clone();
+
         actix::spawn(async move {
-            if let Ok(mut active_drivers_clone) = active_drivers_clone.write() {
-                for (_id, (_, write)) in active_drivers_clone.iter_mut() {
-                    let mut half_write = write.take()
-                        .expect("No debería poder llegar otro mensaje antes de que vuelva por usar AtomicResponse");
+            let mut active_drivers = match active_drivers_clone.write() {
+                Ok(guard) => guard,
+                Err(e) => {
+                    eprintln!("Error al obtener el lock de escritura en `active_drivers`: {:?}", e);
+                    return;
+                }
+            };
 
-                    let msg_type = MessageType::RideRequest(msg_clone);
-                    let serialized = serde_json::to_string(&msg_type).expect("should serialize");
-                    let ret_write = async move {
-                        half_write
-                            .write_all(format!("{}\n", serialized).as_bytes()).await
-                            .expect("should have sent");
-                        half_write
-                    }.await;
+            if let Some((_, write_half)) = active_drivers.get_mut(&driver_id_to_send) {
+                let response = MessageType::RideRequest(msg_clone);
+                let serialized = match serde_json::to_string(&response) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        eprintln!("Error serializando el mensaje: {:?}", e);
+                        return;
+                    }
+                };
 
-                    *write = Some(ret_write);
+                if let Some(write_half) = write_half.as_mut() {
+                    if let Err(e) = write_half.write_all(format!("{}\n", serialized).as_bytes()).await {
+                        eprintln!("Error al enviar el mensaje: {:?}", e);
+                    }
+                } else {
+                    eprintln!("No se pudo enviar el mensaje: no hay conexión activa");
                 }
             } else {
-                eprintln!("No se pudo obtener el lock de lectura en `active_drivers`");
+                eprintln!("No se encontró un `write_half` para el `driver_id_to_send` especificado");
             }
         });
         Ok(())
     }
+
 
     /// Sends the AcceptRide message to the leader
     /// # Arguments
@@ -345,6 +357,24 @@ impl Driver {
         Ok(())
     }
 
+    fn get_closest_driver(&self, message: RideRequest) -> u16 {
+        // PickUp position
+        let (x_passenger, y_passenger) = (message.x_origin as i32, message.y_origin as i32);
+
+        let drivers_last_position = self.drivers_last_position.read().unwrap();
+        let mut closest_driver = 0;
+        let mut min_distance = i32::MAX;
+
+
+        for (driver_id, (x_driver, y_driver)) in drivers_last_position.iter() {
+            let distance = (x_passenger - x_driver).abs() + (y_passenger - y_driver).abs();
+            if distance < min_distance {
+                min_distance = distance;
+                closest_driver = *driver_id;
+            }
+        }
+        closest_driver
+    }
 }
 
 
