@@ -1,9 +1,9 @@
 use std::cmp::PartialEq;
 use std::collections::HashMap;
 use std::{io, thread};
-use std::sync::{Arc, RwLock};
+use std::sync::{mpsc, Arc, RwLock};
 use std::time::Duration;
-use actix::{Actor, AsyncContext, Context, Handler, Message, StreamHandler};
+use actix::{Actor, Addr, AsyncContext, Context, Handler, Message, StreamHandler};
 use actix_async_handler::async_handler;
 use futures::future::MaybeDone::Future;
 use rand::Rng;
@@ -134,7 +134,7 @@ impl Handler<RideRequest> for Driver {
     type Result = ();
 
     /// Handles the ride request message depending on whether the driver is the leader or not.
-    fn handle(&mut self, msg: RideRequest, _ctx: &mut Self::Context) -> Self::Result {
+    fn handle(&mut self, msg: RideRequest, ctx: &mut Self::Context) -> Self::Result {
         let is_leader = *self.is_leader.read().unwrap();
 
         /// Aca iria el tema de la app de pagos
@@ -142,7 +142,7 @@ impl Handler<RideRequest> for Driver {
         if is_leader {
             self.handle_ride_request_as_leader(msg).expect("Error handling ride request as leader");
         } else {
-            self.handle_ride_request(msg).expect("Error handling ride request as driver");
+            self.handle_ride_request_as_driver(msg, ctx.address()).expect("Error handling ride request as driver");
         }
     }
 }
@@ -170,8 +170,14 @@ impl Handler<FinishRide> for Driver {
     type Result = ();
 
     fn handle(&mut self, msg: FinishRide, _ctx: &mut Self::Context) -> Self::Result {
-        println!("Lider {} received the finish ride message from driver {}", self.id, msg.driver_id);
-        // TODO: Eliminar de pending rides y avisar al cliente.
+        let is_leader = *self.is_leader.read().unwrap();
+        if is_leader {
+            println!("Lider {} received the finish ride message from driver {}", self.id, msg.driver_id);
+            // TODO: Eliminar de pending rides y avisar al pasajero.
+        } else {
+            // driver send FinishRide to the leader and change state to Idle
+            self.finish_ride(msg).unwrap()
+        }
     }
 }
 
@@ -246,13 +252,14 @@ impl Driver {
     /// Handles the ride request from the leader as a driver
     /// # Arguments
     /// * `msg` - The message containing the ride request
-    pub fn handle_ride_request(&mut self, msg: RideRequest) -> Result<(), io::Error> {
+    pub fn handle_ride_request_as_driver(&mut self, msg: RideRequest, addr: Addr<Self>) -> Result<(), io::Error> {
         let probability = 0.99;
         let result = boolean_with_probability(probability);
 
         if result && self.state == Sates::Idle {
             println!("Driver {} accepted the ride request", self.id);
             self.accept_ride_request(msg)?;
+            self.drive_and_finish(msg, addr)?;
         } else {
             self.decline_ride_request(msg)?;
             println!("Driver {} rejected the ride request", self.id);
@@ -317,31 +324,23 @@ impl Driver {
     /// Sends the AcceptRide message to the leader
     /// # Arguments
     /// * `msg` - The message containing the ride request
-    fn accept_ride_request(&mut self, msg: RideRequest) -> Result<(), io::Error>{
-
-        // Crear el mensaje de respuesta
-        let response = AcceptRide {
-            passenger_id: msg.id,
-            driver_id: self.id,
-        };
-
-        // Serializar el mensaje en JSON
-        let msg_type = MessageType::AcceptRide(response);
+    fn accept_ride_request(&mut self, ride_request_msg: RideRequest) -> Result<(), io::Error> {
 
         // Cambiar el estado del driver a Driving
         self.state = Sates::Driving;
 
-        // Enviar el mensaje de manera asíncrona
-        self.send_message(msg_type)?;
+        // Crear el mensaje de respuesta
+        let response = AcceptRide {
+            passenger_id: ride_request_msg.id,
+            driver_id: self.id,
+        };
 
-        // Calcular la distancia y dormir
-        let _distance = (msg.x_dest as i32 - msg.x_origin as i32).abs()
-            + (msg.y_dest as i32 - msg.y_origin as i32).abs();
+        // Serializar el mensaje en JSON
+        let accept_msg = MessageType::AcceptRide(response);
 
-        // este sleep me demora todos los mensajes, debe ser porque tambien bloquea las tareas de tokio?
-        //thread::sleep(Duration::from_secs(distance as u64));
+        // Enviar el mensaje de aceptacion de manera asíncrona
+        self.send_message(accept_msg)?;
 
-        self.finish_ride(msg)?;
         Ok(())
     }
 
@@ -366,6 +365,7 @@ impl Driver {
     }
 
     /// Generic function to send a message to the leader or the passenger
+    /// This function use de write stream associated when actor created
     fn send_message(&self, message: MessageType) -> Result<(), io::Error> {
         let write_half = Arc::clone(&self.write_half);
 
@@ -386,6 +386,11 @@ impl Driver {
         Ok(())
     }
 
+    /// Returns the id to the closest driver to the passenger
+    /// # Arguments
+    /// * `message` - The message containing the ride request
+    /// # Returns
+    /// The id of the closest driver
     fn get_closest_driver(&self, message: RideRequest) -> u16 {
         // PickUp position
         let (x_passenger, y_passenger) = (message.x_origin as i32, message.y_origin as i32);
@@ -445,13 +450,37 @@ impl Driver {
         Ok(())
     }
 
-    fn finish_ride(&mut self, msg: RideRequest) -> Result<(), io::Error> {
+    /// Drive to the destination and finish the ride
+    /// # Arguments
+    /// * `msg` - The message containing the ride request
+    /// * `addr` - The address of the driver
+    fn drive_and_finish(&self, ride_request_msg: RideRequest, addr: Addr<Self>) -> Result<(), io::Error> {
+
+        let msg_clone = ride_request_msg.clone();
+        let driver_id = self.id.clone();
+
+        thread::spawn(move || {
+            let distance = (msg_clone.x_dest as i32 - msg_clone.x_origin as i32).abs()
+                + (msg_clone.y_dest as i32 - msg_clone.y_origin as i32).abs();
+            thread::sleep(Duration::from_secs(distance as u64));
+
+            let finish_ride = FinishRide {
+                passenger_id: ride_request_msg.id,
+                driver_id,
+            };
+
+            addr.do_send(finish_ride);
+        });
+
+        Ok(())
+    }
+
+    /// Finish the ride, send the FinishRide message to the leader
+    /// # Arguments
+    /// * `msg` - The message containing the ride request
+    fn finish_ride(&mut self, msg: FinishRide) -> Result<(), io::Error> {
         self.state = Sates::Idle;
-        let response = FinishRide {
-            passenger_id: msg.id,
-            driver_id: self.id,
-        };
-        self.send_message(MessageType::FinishRide(response))?;
+        self.send_message(MessageType::FinishRide(msg))?;
         Ok(())
     }
 }
