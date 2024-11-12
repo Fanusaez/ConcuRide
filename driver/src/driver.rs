@@ -1,7 +1,8 @@
 use std::cmp::PartialEq;
 use std::collections::HashMap;
-use std::io;
+use std::{io, thread};
 use std::sync::{Arc, RwLock};
+use std::time::Duration;
 use actix::{Actor, AsyncContext, Context, Handler, Message, StreamHandler};
 use actix_async_handler::async_handler;
 use futures::future::MaybeDone::Future;
@@ -37,6 +38,13 @@ pub struct DeclineRide {
     pub driver_id: u16,
 }
 
+#[derive(Serialize, Deserialize, Message, Debug, Clone, Copy)]
+#[rtype(result = "()")]
+pub struct FinishRide {
+    pub passenger_id: u16,
+    pub driver_id: u16,
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(tag = "message_type")]
 /// enum Message used to deserialize
@@ -44,6 +52,7 @@ pub enum MessageType {
     RideRequest(RideRequest),
     AcceptRide(AcceptRide),
     DeclineRide(DeclineRide),
+    FinishRide(FinishRide),
 }
 
 pub enum Sates {
@@ -84,6 +93,7 @@ pub struct Driver {
     /// Last known position of the driver (port, (x, y))
     pub drivers_last_position: Arc::<RwLock<HashMap<u16, (i32, i32)>>>,
     /// Passenger last DriveRequest and the drivers who have been offered the ride
+    /// Veremos si es necesario, sino lo podemos volar
     pub ride_and_offers: Arc::<RwLock<HashMap<u16, Vec<u16>>>>,
 }
 
@@ -108,6 +118,10 @@ impl StreamHandler<Result<String, io::Error>> for Driver {
 
                 MessageType::DeclineRide (decline_ride) => {
                     ctx.address().do_send(decline_ride);
+                }
+
+                MessageType::FinishRide (finish_ride) => {
+                    ctx.address().do_send(finish_ride);
                 }
             }
         } else {
@@ -137,6 +151,8 @@ impl Handler<AcceptRide> for Driver {
     type Result = ();
 
     fn handle(&mut self, msg: AcceptRide, _ctx: &mut Self::Context) -> Self::Result {
+        /// TODO: Sacar de ride_and_offers le id del pasajero y el driver que acepto dado que ya se acepto
+        /// TODO: Pending_rides se saca una vez que notifico al pasajero
         println!("Lider {} received the accept response for the ride request from driver {}", self.id, msg.driver_id);
     }
 }
@@ -146,6 +162,16 @@ impl Handler<DeclineRide> for Driver {
 
     fn handle(&mut self, msg: DeclineRide, _ctx: &mut Self::Context) -> Self::Result {
         println!("Lider {} received the declined message for the ride request from driver {}", self.id, msg.driver_id);
+        // TODO: volver a elegir a quien ofrecer el viaje
+    }
+}
+
+impl Handler<FinishRide> for Driver {
+    type Result = ();
+
+    fn handle(&mut self, msg: FinishRide, _ctx: &mut Self::Context) -> Self::Result {
+        println!("Lider {} received the finish ride message from driver {}", self.id, msg.driver_id);
+        // TODO: Eliminar de pending rides y avisar al cliente.
     }
 }
 
@@ -241,20 +267,15 @@ impl Driver {
     /// * `msg` - The message containing the ride request
     pub fn handle_ride_request_as_leader(&mut self, msg: RideRequest) -> Result<(), io::Error>{
 
-        // Lo pongo el pending_rides hasta que alguien acepte el viaje
-        let mut pending_rides = self.pending_rides.write();
-        match pending_rides {
-            Ok(mut pending_rides) => {
-                pending_rides.insert(msg.id.clone(), msg.clone());
-            },
-            Err(e) => {
-                eprintln!("Error al obtener el lock de escritura en `pending_rides`: {:?}", e);
-                return Err(io::Error::new(io::ErrorKind::Other, "Error al obtener el lock de escritura en `pending_rides`"));
-            }
-        }
+        /// saves ride in pending_rides
+        self.insert_ride_in_pending(msg)?;
 
         /// Logica de a quien se le manda el mensaje
         let driver_id_to_send = self.get_closest_driver(msg);
+
+        /// Agrego el id del driver al vector de ofertas
+        self.insert_in_rides_and_offers(msg.id, driver_id_to_send)?;
+
 
         let mut active_drivers_clone = Arc::clone(&self.active_drivers);
         let msg_clone = msg.clone();
@@ -313,6 +334,14 @@ impl Driver {
         // Enviar el mensaje de manera asíncrona
         self.send_message(msg_type)?;
 
+        // Calcular la distancia y dormir
+        let _distance = (msg.x_dest as i32 - msg.x_origin as i32).abs()
+            + (msg.y_dest as i32 - msg.y_origin as i32).abs();
+
+        // este sleep me demora todos los mensajes, debe ser porque tambien bloquea las tareas de tokio?
+        //thread::sleep(Duration::from_secs(distance as u64));
+
+        self.finish_ride(msg)?;
         Ok(())
     }
 
@@ -375,9 +404,57 @@ impl Driver {
         }
         closest_driver
     }
+
+    /// Inserts a ride in the pending rides
+    /// # Arguments
+    /// * `msg` - The message containing the ride request
+    fn insert_ride_in_pending(&self, msg: RideRequest) -> Result<(), io::Error> {
+        // Lo pongo el pending_rides hasta que alguien acepte el viaje
+        let mut pending_rides = self.pending_rides.write();
+        match pending_rides {
+            Ok(mut pending_rides) => {
+                pending_rides.insert(msg.id.clone(), msg.clone());
+            },
+            Err(e) => {
+                eprintln!("Error al obtener el lock de escritura en `pending_rides`: {:?}", e);
+                return Err(io::Error::new(io::ErrorKind::Other, "Error al obtener el lock de escritura en `pending_rides`"));
+            }
+        }
+        Ok(())
+    }
+
+    /// Inserts the passenger id and the driver id in the ride_and_offers hashmap
+    /// # Arguments
+    /// * `passenger_id` - The id of the passenger
+    /// * `driver_id` - The id of the driver
+    fn insert_in_rides_and_offers(&self, passenger_id: u16, driver_id: u16) -> Result<(), io::Error> {
+        let mut ride_and_offers = self.ride_and_offers.write();
+        match ride_and_offers {
+            Ok(mut ride_and_offers) => {
+                if let Some(offers) = ride_and_offers.get_mut(&passenger_id) {
+                    offers.push(driver_id);
+                } else {
+                    ride_and_offers.insert(passenger_id, vec![driver_id]);
+                }
+            },
+            Err(e) => {
+                eprintln!("Error al obtener el lock de escritura en `ride_and_offers`: {:?}", e);
+                return Err(io::Error::new(io::ErrorKind::Other, "Error al obtener el lock de escritura en `ride_and_offers`"));
+            }
+        }
+        Ok(())
+    }
+
+    fn finish_ride(&mut self, msg: RideRequest) -> Result<(), io::Error> {
+        self.state = Sates::Idle;
+        let response = FinishRide {
+            passenger_id: msg.id,
+            driver_id: self.id,
+        };
+        self.send_message(MessageType::FinishRide(response))?;
+        Ok(())
+    }
 }
-
-
 
 pub fn boolean_with_probability(probability: f64) -> bool {
     let mut rng = rand::thread_rng();
