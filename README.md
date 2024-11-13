@@ -16,11 +16,13 @@ Se definen tres aplicaciones: una de conductores, una de pasajeros y otra de pag
 
 ![Diseño](./diagramas/concu_1-Página-2.jpg)
 
+En primera instancia se opta por utilizar el algoritmo de anillo para la elección de un nuevo líder en caso de que el mismo se desconecte.
+
 ## Actores
 
 ### Conductor
 **Finalidad general:**
-- Aceptar un viaje en rango, realizarlo e informar al cliente que terminó.
+- Aceptar un viaje en rango, realizarlo e informar al conductor líder que terminó.
 
 **Estado interno:**
 - Esperando viaje, viajando
@@ -29,7 +31,8 @@ Se definen tres aplicaciones: una de conductores, una de pasajeros y otra de pag
 ### Conductor Líder
 **Finalidad general:**
 - Deriva los pedidos de viaje a conductores que estén en el rango de salida y reserva los pagos informando a la app de pagos. 
-- Quita conductores que estén caídos. 
+- Quita conductores que estén caídos.
+- Informa a los clientes que el viaje finalizó cuando le llega esta información del conductor a cargo del viaje.
 
 **Estado interno:**
 - Esperando viaje, viajando
@@ -46,6 +49,7 @@ Se definen tres aplicaciones: una de conductores, una de pasajeros y otra de pag
 ### Pago
 **Finalidad general:**
 - Encargado de reservar y cobrar los montos de los viajes.
+- Es la entidad que define si un pago es aceptado o rechazado y se lo informa al conductor líder.
 
 **Estado interno:**
 - Cobrando, finalizando
@@ -207,6 +211,8 @@ pub struct Driver {
 
 ## Protocolo
 
+Para la conexión entre pasajeros, conductores y app de pagos utilizaremos sockets con el protocolo de transporte TCP. Los mensajes y sus payloads son los mostrados en la sección anterior del informe; su serialización y deserialización se realizan utilizando el framework serde.
+
 ## Casos de interés
 - Aceptación del pago
 - Rechazo del pago → El pasajero no puede realizar el viaje, pero puede llegar a realizar los siguientes
@@ -214,7 +220,7 @@ pub struct Driver {
 - Desconexión de un conductor luego de aceptar el viaje → El viaje quedara pendiente a la reconexion del conductor, para avisar al lider que el viaje finalizo.
 - Desconexión de un pasajero antes de pagar → No se envía la solicitud de viaje
 - No hay conductores en el rango de viaje → Se agranda el radio de búsqueda
-- Queda ver que supuestos tomamos con la caida del lider!!!!!
+- Desconexión del líder → Se procede a hacer una búsqueda de un nuevo líder utilizando el algoritmo de anillo y una vez elegido, éste recopila la información de pagos almacenada en la app de pagos y la información de los viajes almacenada en los otros conductores.
 
 ## Supuestos tomados
 
