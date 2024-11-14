@@ -16,7 +16,6 @@ mod payment;
 use crate::payment::{SocketWriter, SocketReader};
 
 const DEFAULT_PORT: u16 = 7500;
-const LEADER_PORT: u16 = 6000;
 
 #[actix_rt::main]
 async fn main() -> std::io::Result<()> {

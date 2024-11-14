@@ -152,6 +152,8 @@ impl Handler<RideRequest> for Driver {
         let is_leader = *self.is_leader.read().unwrap();
 
         /// Aca iria el tema de la app de pagos
+        /// Enviar un 'SendPayment' a traves del self.payment_write_half?
+        let _ = self.send_payment();
 
         if is_leader {
             self.handle_ride_request_as_leader(msg).expect("Error handling ride request as leader");
@@ -222,11 +224,9 @@ impl Driver {
         let listener = TcpListener::bind(format!("127.0.0.1:{}", port)).await?;
         println!("WAITING FOR PASSENGERS TO CONNECT(leader) OR ACCEPTING LEADER(drivers)\n");
 
-        // Conexión con el servicio de pagos
+        // Conexión con el servicio de pagos (TODO: DEBERIA CONECTARSE SOLO SI ES LIDER)
         let payment_stream = TcpStream::connect(format!("127.0.0.1:{}", PAYMENT_APP_PORT)).await?;
-        let (payment_read_half, payment_write_half) = split(payment_stream);
-
-        // Agrega el `write_half` de la conexión de pago a una variable compartida
+        let (_, payment_write_half) = split(payment_stream);
         let payment_write_half = Arc::new(RwLock::new(Some(payment_write_half)));
 
         while let Ok((stream,  _)) = listener.accept().await {
@@ -504,6 +504,33 @@ impl Driver {
     fn finish_ride(&mut self, msg: FinishRide) -> Result<(), io::Error> {
         self.state = Sates::Idle;
         self.send_message(MessageType::FinishRide(msg))?;
+        Ok(())
+    }
+
+    fn send_payment(&mut self) -> Result<(), io::Error>{
+        let message = SendPayment{id: 1000, amount: 2399};
+        let msg = MessageType::SendPayment(message);
+        self.send_message_to_payment_app(msg)?;
+        Ok(())
+    }
+
+    fn send_message_to_payment_app(&self, message: MessageType) -> Result<(), io::Error> {
+        let write_half = Arc::clone(&self.payment_write_half);
+
+        let serialized = serde_json::to_string(&message)?;
+
+        actix::spawn(async move {
+            let mut write_guard = write_half.write().unwrap();
+
+            if let Some(write_half) = write_guard.as_mut() {
+                if let Err(e) = write_half.write_all(format!("{}\n", serialized).as_bytes()).await {
+                    eprintln!("Error al enviar el mensaje: {:?}", e);
+                }
+            } else {
+                eprintln!("No se pudo enviar el mensaje: no hay conexión activa");
+            }
+        });
+
         Ok(())
     }
 }
