@@ -13,6 +13,8 @@ use tokio_stream::wrappers::LinesStream;
 use serde::{Serialize, Deserialize};
 use crate::init;
 
+const PAYMENT_APP_PORT: u16 = 7500;
+
 /// RideRequest struct, ver como se puede importar desde otro archivo, esto esta en utils.rs\
 #[derive(Serialize, Deserialize, Message, Debug, Clone, Copy)]
 #[rtype(result = "()")]
@@ -45,6 +47,13 @@ pub struct FinishRide {
     pub driver_id: u16,
 }
 
+#[derive(Serialize, Deserialize, Message, Debug, Clone, Copy)]
+#[rtype(result = "()")]
+pub struct SendPayment {
+    pub id: u16,
+    pub amount: i32,
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(tag = "message_type")]
 /// enum Message used to deserialize
@@ -53,6 +62,7 @@ pub enum MessageType {
     AcceptRide(AcceptRide),
     DeclineRide(DeclineRide),
     FinishRide(FinishRide),
+    SendPayment(SendPayment),
 }
 
 pub enum Sates {
@@ -95,6 +105,7 @@ pub struct Driver {
     /// Passenger last DriveRequest and the drivers who have been offered the ride
     /// Veremos si es necesario, sino lo podemos volar
     pub ride_and_offers: Arc::<RwLock<HashMap<u16, Vec<u16>>>>,
+    pub payment_write_half: Arc<RwLock<Option<WriteHalf<TcpStream>>>>,
 }
 
 impl Actor for Driver {
@@ -122,6 +133,9 @@ impl StreamHandler<Result<String, io::Error>> for Driver {
 
                 MessageType::FinishRide (finish_ride) => {
                     ctx.address().do_send(finish_ride);
+                }
+                _ => {
+                    println!("Mensaje desconocido");
                 }
             }
         } else {
@@ -208,6 +222,13 @@ impl Driver {
         let listener = TcpListener::bind(format!("127.0.0.1:{}", port)).await?;
         println!("WAITING FOR PASSENGERS TO CONNECT(leader) OR ACCEPTING LEADER(drivers)\n");
 
+        // Conexión con el servicio de pagos
+        let payment_stream = TcpStream::connect(format!("127.0.0.1:{}", PAYMENT_APP_PORT)).await?;
+        let (payment_read_half, payment_write_half) = split(payment_stream);
+
+        // Agrega el `write_half` de la conexión de pago a una variable compartida
+        let payment_write_half = Arc::new(RwLock::new(Some(payment_write_half)));
+
         while let Ok((stream,  _)) = listener.accept().await {
 
             println!("CONNECTION ACCEPTED\n");
@@ -243,6 +264,8 @@ impl Driver {
                     write_half: write_half.clone(),
                     drivers_last_position: drivers_last_position_arc.clone(),
                     ride_and_offers: ride_and_offers.clone(),
+                    payment_write_half: payment_write_half.clone(),
+
                 }
             });
         }

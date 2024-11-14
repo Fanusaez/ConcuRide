@@ -2,12 +2,15 @@ use actix::{Actor, Context, Handler, Message, Addr};
 //use tokio::net::tcp::{WriteHalf, ReadHalf};
 use std::collections::HashMap;
 use std::io::{self};
-use tokio::io::{WriteHalf, ReadHalf, AsyncReadExt, AsyncWriteExt};
+use tokio::io::{WriteHalf, ReadHalf, AsyncReadExt, AsyncWriteExt, BufReader, AsyncBufReadExt};
 use tokio::net::TcpStream;
 use serde::{Serialize, Deserialize};
 use actix::StreamHandler;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use std::net::SocketAddr;
+use tokio_stream::wrappers::LinesStream;
+
 
 
 
@@ -52,8 +55,9 @@ pub struct PaymentRejected {
 
 // Actor lector
 pub struct SocketReader {
-    read_half: ReadHalf<TcpStream>,
+    addr: SocketAddr,
     payment_app: Addr<PaymentApp>,
+    //read_half: ReadHalf<TcpStream>,
 }
 
 impl Actor for SocketReader {
@@ -61,10 +65,17 @@ impl Actor for SocketReader {
 }
 
 impl SocketReader {
-    pub fn new(read_half: ReadHalf<TcpStream>, payment_app: Addr<PaymentApp>) -> Self {
-        // Aquí leerías los mensajes del socket en un bucle y los reenviarías a PaymentApp
-        // usando `payment_app.do_send(IncomingMessage(...))`.
-        Self {read_half, payment_app}
+    pub fn new(addr: SocketAddr, payment_app: Addr<PaymentApp>) -> Self {
+        println!("SocketReader creado");
+        Self {addr, payment_app}
+    }
+
+    pub async fn start(read_half: ReadHalf<TcpStream>, addr: SocketAddr, payment_app: Addr<PaymentApp>) -> Result<(), io::Error> {
+        let addr = SocketReader::create(|ctx| {
+            SocketReader::add_stream(LinesStream::new(BufReader::new(read_half).lines()), ctx);
+            SocketReader::new(addr, payment_app)
+        });
+        Ok(())
     }
 
 }
@@ -72,7 +83,7 @@ impl SocketReader {
 impl StreamHandler<Result<String, io::Error>> for SocketReader {
     fn handle(&mut self, read: Result<String, io::Error>, _ctx: &mut Self::Context) {
         if let Ok(line) = read {
-            println!("{}", line);
+            println!("Mensaje de {}: {}", self.addr, line);
             let message: MessageType = serde_json::from_str(&line).expect("Failed to deserialize message");
             match message {
                 MessageType::SendPayment(message) => {
@@ -145,7 +156,7 @@ impl Handler<PaymentAccepted> for SocketWriter {
 
 
 pub struct PaymentApp {
-    rides_and_payments: HashMap<u16,u16>,
+    rides_and_payments: HashMap<u16,i32>, //id, amount
     writer: Addr<SocketWriter>,
 }
 
@@ -160,7 +171,7 @@ impl Handler<SendPayment> for PaymentApp {
     fn handle(&mut self, msg: SendPayment, _: &mut Self::Context) {
         let payment_accepted = PaymentAccepted{id: msg.id};
         println!("Pago aceptado");
-        self.rides_and_payments.insert(msg.id,1000); //Lo agrego a los viajes aceptados
+        self.rides_and_payments.insert(msg.id,msg.amount); //Lo agrego a los viajes aceptados
         println!("Pago agregado");
         self.writer.do_send(payment_accepted);
     }

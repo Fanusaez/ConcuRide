@@ -3,9 +3,13 @@ use crate::payment::PaymentApp;
 use actix::prelude::*;
 use tokio::net::TcpStream;
 use tokio::io::{split, ReadHalf, WriteHalf};
+use actix::{Actor, Addr};
 //use std::sync::Arc;
 //use std::sync::RwLock;
 //use std::io; 
+use tokio::net::TcpListener;
+use std::net::SocketAddr;
+
 
 mod payment;
 
@@ -26,20 +30,24 @@ async fn main() -> std::io::Result<()> {
 
     println!("Usando el puerto: {}", port);
 
-    let stream = TcpStream::connect(format!("127.0.0.1:{}", LEADER_PORT)).await?;
-    let (read_half, write_half) = split(stream);
+    let listener = TcpListener::bind(format!("127.0.0.1:{}", DEFAULT_PORT)).await.unwrap();
 
-    // Creo el socket writer (encargado de recibir los mensajes de payment app y enviarlos
-    // por socket al conductor lider)
-    let writer_addr = SocketWriter::new(write_half).start();
+    while let Ok((stream, addr)) = listener.accept().await {
+        let (read_half, write_half) = split(stream);
+        println!("[{:?}] Cliente conectado", addr);
+        // Creo el socket writer (encargado de recibir los mensajes de payment app y enviarlos
+        // por socket al conductor lider)
+        let writer_addr = SocketWriter::new(write_half).start();
 
-    // Creo la app de pagos y le paso la direccion del socket writer para enviarle los mensajes
-    let payment_app = PaymentApp::new(writer_addr).start();
+        // Creo la app de pagos y le paso la direccion del socket writer para enviarle los mensajes
+        let payment_app_addr = PaymentApp::new(writer_addr).start();
+    
+        // Creo el actor SocketReader, pasando el read_half y la dirección de PaymentApp
+        SocketReader::start(read_half, addr, payment_app_addr).await?;
+    }
 
-    // Creo el actor SocketReader, pasando el read_half y la dirección de PaymentApp
-    let _reader_addr = SocketReader::new(read_half, payment_app.clone()).start();
+    println!("b1");
 
-    //System::current().stop();
     Ok(())
 
 
