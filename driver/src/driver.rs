@@ -13,7 +13,6 @@ use tokio_stream::wrappers::LinesStream;
 use serde::{Serialize, Deserialize};
 use crate::init;
 
-const PAYMENT_APP_PORT: u16 = 7500;
 
 /// RideRequest struct, ver como se puede importar desde otro archivo, esto esta en utils.rs\
 #[derive(Serialize, Deserialize, Message, Debug, Clone, Copy)]
@@ -52,6 +51,18 @@ pub struct FinishRide {
 pub struct SendPayment {
     pub id: u16,
     pub amount: i32,
+}
+
+#[derive(Serialize, Deserialize, Message, Debug, Clone, Copy)]
+#[rtype(result = "()")]
+pub struct PaymentRejected {
+    pub id: u16,
+}
+
+#[derive(Serialize, Deserialize, Message, Debug, Clone, Copy)]
+#[rtype(result = "()")]
+pub struct PaymentAccepted {
+    pub id: u16,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -107,7 +118,10 @@ pub struct Driver {
     /// Passenger last DriveRequest and the drivers who have been offered the ride
     /// Veremos si es necesario, sino lo podemos volar
     pub ride_and_offers: Arc::<RwLock<HashMap<u16, Vec<u16>>>>,
+    /// Connection to the payment app
     pub payment_write_half: Arc<RwLock<Option<WriteHalf<TcpStream>>>>,
+    /// Already paid rides (ready to send to drivers)
+    pub paid_rides: Arc<RwLock<HashMap<u16, RideRequest>>>,
 }
 
 impl Actor for Driver {
@@ -136,6 +150,12 @@ impl StreamHandler<Result<String, io::Error>> for Driver {
                 MessageType::FinishRide (finish_ride) => {
                     ctx.address().do_send(finish_ride);
                 }
+                MessageType::PaymentAccepted(payment_accepted) => {
+                    ctx.address().do_send(payment_accepted);
+                }
+                MessageType::PaymentRejected(payment_rejected) => {
+                    ctx.address().do_send(payment_rejected);
+                }
                 _ => {
                     println!("Unknown Message");
                 }
@@ -158,13 +178,54 @@ impl Handler<RideRequest> for Driver {
         
         if is_leader {
             println!("Enviando pago");
-            let _ = self.send_payment(msg).expect("Error sending payment");
-            self.handle_ride_request_as_leader(msg).expect("Error handling ride request as leader");
-        } else {
-            self.handle_ride_request_as_driver(msg, ctx.address()).expect("Error handling ride request as driver");
+            self.send_payment(msg).expect("Error sending payment");
         }
     }
 }
+
+impl Handler<PaymentAccepted> for Driver {
+    type Result = ();
+
+    fn handle(&mut self, msg: PaymentAccepted, ctx: &mut Self::Context) -> Self::Result {
+        let is_leader = *self.is_leader.read().unwrap();
+
+        let ride_request = {
+            let mut pending_rides = self.pending_rides.write().unwrap();
+            pending_rides.remove(&msg.id)
+        };
+
+        //TODO: hay que ver el tema de los ids de los viajes (No se deberian repetir?)
+        match ride_request {
+            Some(ride_request) => {
+                if is_leader {
+                    // Manejar la lógica como líder
+                    if let Err(err) = self.handle_ride_request_as_leader(ride_request) {
+                        eprintln!("Error handling ride request as leader: {}", err);
+                    }
+                    self.paid_rides.write().unwrap().insert(ride_request.id, ride_request);
+                } else {
+                    // Manejar la lógica como driver normal
+                    if let Err(err) = self.handle_ride_request_as_driver(ride_request, ctx.address()) {
+                        eprintln!("Error handling ride request as driver: {}", err);
+                    }
+                }
+            }
+            None => {
+                eprintln!("RideRequest with id {} not found in pending_rides", msg.id);
+            }
+        }
+    }
+}
+
+impl Handler<PaymentRejected> for Driver {
+    type Result = ();
+
+    fn handle(&mut self, msg: PaymentRejected, ctx: &mut Self::Context) -> Self::Result {
+
+    }
+
+}
+
 
 impl Handler<AcceptRide> for Driver {
     type Result = ();
@@ -227,11 +288,6 @@ impl Driver {
         let listener = TcpListener::bind(format!("127.0.0.1:{}", port)).await?;
         println!("WAITING FOR PASSENGERS TO CONNECT(leader) OR ACCEPTING LEADER(drivers)\n");
 
-        // Conexión con el servicio de pagos (TODO: DEBERIA CONECTARSE SOLO SI ES LIDER)
-        let payment_stream = TcpStream::connect(format!("127.0.0.1:{}", PAYMENT_APP_PORT)).await?;
-        let (_, payment_write_half) = split(payment_stream);
-        let payment_write_half = Arc::new(RwLock::new(Some(payment_write_half)));
-
         while let Ok((stream,  _)) = listener.accept().await {
 
             println!("CONNECTION ACCEPTED\n");
@@ -267,7 +323,8 @@ impl Driver {
                     write_half: write_half.clone(),
                     drivers_last_position: drivers_last_position_arc.clone(),
                     ride_and_offers: ride_and_offers.clone(),
-                    payment_write_half: payment_write_half.clone(),
+                    //payment_write_half,
+                    //TODO: inicializar paid_rides y payment_write_half
 
                 }
             });
