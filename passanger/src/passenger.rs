@@ -66,6 +66,7 @@ impl Passenger {
     /// * `tx` - The channel to send a completion signal to the main function
     pub async fn start(port: u16, rides: Vec<RideRequest>, tx: Sender<()>) -> Result<(), io::Error> {
         let stream = TcpStream::connect(format!("127.0.0.1:{}", crate::LEADER_PORT)).await?;
+        println!("Connected");
         let rides_clone = rides.clone();
         let addr = Passenger::create(|ctx| {
             let (read, write_half) = split(stream);

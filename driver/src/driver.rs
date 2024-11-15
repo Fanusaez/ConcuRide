@@ -63,6 +63,8 @@ pub enum MessageType {
     DeclineRide(DeclineRide),
     FinishRide(FinishRide),
     SendPayment(SendPayment),
+    PaymentAccepted(PaymentAccepted),
+    PaymentRejected(PaymentRejected),
 }
 
 pub enum Sates {
@@ -135,7 +137,7 @@ impl StreamHandler<Result<String, io::Error>> for Driver {
                     ctx.address().do_send(finish_ride);
                 }
                 _ => {
-                    println!("Mensaje desconocido");
+                    println!("Unknown Message");
                 }
             }
         } else {
@@ -153,9 +155,10 @@ impl Handler<RideRequest> for Driver {
 
         /// Aca iria el tema de la app de pagos
         /// Enviar un 'SendPayment' a traves del self.payment_write_half?
-        let _ = self.send_payment();
-
+        
         if is_leader {
+            println!("Enviando pago");
+            let _ = self.send_payment(msg).expect("Error sending payment");
             self.handle_ride_request_as_leader(msg).expect("Error handling ride request as leader");
         } else {
             self.handle_ride_request_as_driver(msg, ctx.address()).expect("Error handling ride request as driver");
@@ -507,8 +510,9 @@ impl Driver {
         Ok(())
     }
 
-    fn send_payment(&mut self) -> Result<(), io::Error>{
-        let message = SendPayment{id: 1000, amount: 2399};
+    fn send_payment(&mut self, msg: RideRequest) -> Result<(), io::Error>{
+        //TODO: Ver el tema de la cantidad pagada
+        let message = SendPayment{id: msg.id, amount: 2399};
         let msg = MessageType::SendPayment(message);
         self.send_message_to_payment_app(msg)?;
         Ok(())
@@ -516,7 +520,6 @@ impl Driver {
 
     fn send_message_to_payment_app(&self, message: MessageType) -> Result<(), io::Error> {
         let write_half = Arc::clone(&self.payment_write_half);
-
         let serialized = serde_json::to_string(&message)?;
 
         actix::spawn(async move {

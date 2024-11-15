@@ -10,8 +10,9 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use std::net::SocketAddr;
 use tokio_stream::wrappers::LinesStream;
+use rand::Rng;
 
-
+const PROBABILITY_PAYMENT_REJECTED: f64 = 0.2;
 
 
 // Mensajes
@@ -20,7 +21,7 @@ use tokio_stream::wrappers::LinesStream;
 enum MessageType {
     SendPayment(SendPayment),
     PaymentAccepted(PaymentAccepted),
-    //PaymentRejected(PaymentRejected),
+    PaymentRejected(PaymentRejected),
 }
 
 #[derive(Serialize, Deserialize, Message, Debug, Clone, Copy)]
@@ -134,16 +135,40 @@ impl Handler<PaymentAccepted> for SocketWriter {
             .expect("Error serializando el mensaje PaymentAccepted");
 
         // Lanza una tarea asincrónica para escribir en el socket
-        let write_half = self.write_half.clone(); // Necesitamos clonar el Arc para moverlo al async block
+        let write_half = self.write_half.clone();
 
         actix::spawn(async move {
-            let mut write_half = write_half.write().await; // Usamos RwLock de Tokio
+            let mut write_half = write_half.write().await;
 
             // Escribir el mensaje serializado en el socket
             if let Err(e) = write_half.write_all(json_message.as_bytes()).await {
                 eprintln!("Error escribiendo en el socket: {:?}", e);
             }
-            println!("Pago aceptado enviado");
+            println!("Payment accepted sent");
+        });
+
+    }
+}
+
+impl Handler<PaymentRejected> for SocketWriter {
+    type Result = ();
+
+    /// Serializa y envía el mensaje por el socket
+    fn handle(&mut self, msg: PaymentRejected, _: &mut Self::Context) {
+        let json_message = serde_json::to_string(&MessageType::PaymentRejected(msg))
+            .expect("Error serializando el mensaje PaymentAccepted");
+
+        // Lanza una tarea asincrónica para escribir en el socket
+        let write_half = self.write_half.clone();
+
+        actix::spawn(async move {
+            let mut write_half = write_half.write().await;
+
+            // Escribir el mensaje serializado en el socket
+            if let Err(e) = write_half.write_all(json_message.as_bytes()).await {
+                eprintln!("Error escribiendo en el socket: {:?}", e);
+            }
+            println!("Payment rejected sent");
         });
 
     }
@@ -169,11 +194,18 @@ impl Handler<SendPayment> for PaymentApp {
 
     /// Procesa el mensaje 'SendPayment' y envía al wirter si fue aceptado o no
     fn handle(&mut self, msg: SendPayment, _: &mut Self::Context) {
-        let payment_accepted = PaymentAccepted{id: msg.id};
-        println!("Pago aceptado");
-        self.rides_and_payments.insert(msg.id,msg.amount); //Lo agrego a los viajes aceptados
-        println!("Pago agregado");
-        self.writer.do_send(payment_accepted);
+        if self.payment_is_accepted() {
+            let payment_accepted = PaymentAccepted{id: msg.id};
+            println!("Pago accepted");
+            self.rides_and_payments.insert(msg.id,msg.amount); //Lo agrego a los viajes aceptados
+            println!("Pago added");
+            self.writer.do_send(payment_accepted);
+        }
+        else {
+            let payment_rejected = PaymentRejected{id:msg.id};
+            println!("Payment rejected");
+            self.writer.do_send(payment_rejected);
+        }
     }
 }
 
@@ -184,6 +216,12 @@ impl PaymentApp {
             rides_and_payments: HashMap::new(),
             writer,
         }
+    }
+
+    pub fn payment_is_accepted(&mut self) -> bool {
+        let mut rng = rand::thread_rng();
+        let random_number: f64 = rng.gen_range(0.0..1.0);
+        random_number > PROBABILITY_PAYMENT_REJECTED
     }
 }
 
