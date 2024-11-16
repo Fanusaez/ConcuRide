@@ -133,7 +133,9 @@ impl StreamHandler<Result<String, io::Error>> for Driver {
     /// Matches the message type and sends it to the corresponding handler.
     fn handle(&mut self, read: Result<String, io::Error>, ctx: &mut Self::Context) {
         if let Ok(line) = read {
+            println!("Raw message received: {}", line);
             let message: MessageType = serde_json::from_str(&line).expect("Failed to deserialize message");
+            println!("Msg: {:?}", message);
             match message {
                 MessageType::RideRequest(coords)=> {
                     ctx.address().do_send(coords);
@@ -152,6 +154,7 @@ impl StreamHandler<Result<String, io::Error>> for Driver {
                 }
 
                 MessageType::PaymentAccepted(payment_accepted) => {
+                    println!("Payment accepted msg received");
                     ctx.address().do_send(payment_accepted);
                 }
 
@@ -589,6 +592,7 @@ impl Driver {
                 if let Err(e) = write_half.write_all(format!("{}\n", serialized).as_bytes()).await {
                     eprintln!("Error al enviar el mensaje: {:?}", e);
                 }
+                println!("Payment sent");
             } else {
                 eprintln!("No se pudo enviar el mensaje: no hay conexión activa");
             }

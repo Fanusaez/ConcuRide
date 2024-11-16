@@ -114,19 +114,19 @@ impl Handler<PaymentAccepted> for SocketWriter {
     /// Serializa y envía el mensaje por el socket
     fn handle(&mut self, msg: PaymentAccepted, _: &mut Self::Context) {
         let json_message = serde_json::to_string(&MessageType::PaymentAccepted(msg))
-            .expect("Error serializando el mensaje PaymentAccepted");
+        .expect("Error serializando el mensaje PaymentAccepted");
 
         // Lanza una tarea asincrónica para escribir en el socket
         let write_half = self.write_half.clone();
 
         actix::spawn(async move {
             let mut write_half = write_half.write().await;
-
+            
             // Escribir el mensaje serializado en el socket
-            if let Err(e) = write_half.write_all(json_message.as_bytes()).await {
+            if let Err(e) = write_half.write_all(format!("{}\n", json_message).as_bytes()).await {
                 eprintln!("Error escribiendo en el socket: {:?}", e);
             }
-            println!("Payment accepted sent");
+            println!("Payment accepted sent {}", json_message);
         });
 
     }
