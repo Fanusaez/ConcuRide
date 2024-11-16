@@ -174,12 +174,9 @@ impl Handler<RideRequest> for Driver {
     /// Handles the ride request message depending on whether the driver is the leader or not.
     fn handle(&mut self, msg: RideRequest, ctx: &mut Self::Context) -> Self::Result {
         let is_leader = *self.is_leader.read().unwrap();
-
-        /// Aca iria el tema de la app de pagos
-        /// Enviar un 'SendPayment' a traves del self.payment_write_half?
         
         if is_leader {
-            println!("Enviando pago");
+            println!("Making reservation for payment of ride request from passenger {}", msg.id);
             self.send_payment(msg).expect("Error sending payment");
         } else {
             self.handle_ride_request_as_driver(msg, ctx.address()).expect("Error handling ride request as driver");
@@ -187,13 +184,17 @@ impl Handler<RideRequest> for Driver {
     }
 }
 
+
 impl Handler<PaymentAccepted> for Driver {
     type Result = ();
 
+    /// Only receved by leader
+    /// Handles the payment accepted message
     fn handle(&mut self, msg: PaymentAccepted, ctx: &mut Self::Context) -> Self::Result {
 
         println!("Leader {} received the payment accepted message for the ride request from passenger {}", self.id, msg.id);
 
+        /// Hay que remover antes de terminar?
         let ride_request = {
             let mut pending_rides = self.pending_rides.write().unwrap();
             pending_rides.remove(&msg.id)
@@ -202,7 +203,7 @@ impl Handler<PaymentAccepted> for Driver {
         //TODO: hay que ver el tema de los ids de los viajes (No se deberian repetir?)
         match ride_request {
             Some(ride_request) => {
-               self.handle_ride_request_as_driver(ride_request, ctx.address()).unwrap()
+               self.handle_ride_request_as_leader(ride_request).unwrap()
             }
             None => {
                 eprintln!("RideRequest with id {} not found in pending_rides", msg.id);
@@ -215,7 +216,7 @@ impl Handler<PaymentRejected> for Driver {
     type Result = ();
 
     fn handle(&mut self, msg: PaymentRejected, ctx: &mut Self::Context) -> Self::Result {
-
+        /// TODO: avisar al cliente que se rechazo el pago de viaje
     }
 
 }
@@ -223,7 +224,7 @@ impl Handler<PaymentRejected> for Driver {
 
 impl Handler<AcceptRide> for Driver {
     type Result = ();
-
+    /// Only received by leader
     fn handle(&mut self, msg: AcceptRide, _ctx: &mut Self::Context) -> Self::Result {
         /// TODO: Sacar de ride_and_offers le id del pasajero y el driver que acepto dado que ya se acepto
         /// TODO: Pending_rides se saca una vez que notifico al pasajero
@@ -233,7 +234,7 @@ impl Handler<AcceptRide> for Driver {
 
 impl Handler<DeclineRide> for Driver {
     type Result = ();
-
+    /// Only received by leader
     fn handle(&mut self, msg: DeclineRide, _ctx: &mut Self::Context) -> Self::Result {
         println!("Lider {} received the declined message for the ride request from driver {}", self.id, msg.driver_id);
         // TODO: volver a elegir a quien ofrecer el viaje
@@ -354,7 +355,7 @@ impl Driver {
 
     }
 
-    /// Handles the ride request from passanger
+    /// Handles the ride request from passanger, sends RideRequest to the closest driver
     /// TODO: LOGICA PARA VER A QUIEN SE LE DAN LOS VIAJES, ACA SE ESTA MANDANDO A TODOS
     /// # Arguments
     /// * `msg` - The message containing the ride request
