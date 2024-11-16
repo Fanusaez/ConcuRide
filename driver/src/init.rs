@@ -9,7 +9,8 @@ const PAYMENT_APP_PORT: u16 = 7500;
 pub async fn init_driver(drivers_connections: &mut HashMap<u16, (Option<ReadHalf<TcpStream>>, Option<WriteHalf<TcpStream>>)>,
                     drivers_ports: Vec<u16>,
                     drivers_last_position: &mut HashMap<u16, (i32, i32)>,
-                    is_leader: bool) -> Result<(), io::Error> {
+                    is_leader: bool,
+                    payment_write_half: &mut Option<WriteHalf<TcpStream>>) -> Result<(), io::Error> {
     if is_leader {
         for driver_port in drivers_ports.iter() {
             let stream = TcpStream::connect(format!("127.0.0.1:{}", driver_port)).await?;
@@ -19,12 +20,12 @@ pub async fn init_driver(drivers_connections: &mut HashMap<u16, (Option<ReadHalf
         }
         // Conexión con el servicio de pagos (TODO: DEBERIA CONECTARSE SOLO SI ES LIDER)
         let payment_stream = TcpStream::connect(format!("127.0.0.1:{}", PAYMENT_APP_PORT)).await?;
-        let (_, payment_write_half) = split(payment_stream);
-        let payment_write_half = Arc::new(RwLock::new(Some(payment_write_half)));
-        return Ok(())
+        let (_, write_half) = split(payment_stream);
+        *payment_write_half = Some(write_half);
+        Ok(())
     }
     else {
         // TODO funcionalidad del driver que no es lider
-        return Ok(())
+        Ok(())
     }
 }

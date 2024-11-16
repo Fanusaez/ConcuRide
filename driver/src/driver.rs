@@ -150,9 +150,11 @@ impl StreamHandler<Result<String, io::Error>> for Driver {
                 MessageType::FinishRide (finish_ride) => {
                     ctx.address().do_send(finish_ride);
                 }
+
                 MessageType::PaymentAccepted(payment_accepted) => {
                     ctx.address().do_send(payment_accepted);
                 }
+
                 MessageType::PaymentRejected(payment_rejected) => {
                     ctx.address().do_send(payment_rejected);
                 }
@@ -179,6 +181,8 @@ impl Handler<RideRequest> for Driver {
         if is_leader {
             println!("Enviando pago");
             self.send_payment(msg).expect("Error sending payment");
+        } else {
+            self.handle_ride_request_as_driver(msg, ctx.address()).expect("Error handling ride request as driver");
         }
     }
 }
@@ -187,7 +191,8 @@ impl Handler<PaymentAccepted> for Driver {
     type Result = ();
 
     fn handle(&mut self, msg: PaymentAccepted, ctx: &mut Self::Context) -> Self::Result {
-        let is_leader = *self.is_leader.read().unwrap();
+
+        println!("Leader {} received the payment accepted message for the ride request from passenger {}", self.id, msg.id);
 
         let ride_request = {
             let mut pending_rides = self.pending_rides.write().unwrap();
@@ -197,18 +202,7 @@ impl Handler<PaymentAccepted> for Driver {
         //TODO: hay que ver el tema de los ids de los viajes (No se deberian repetir?)
         match ride_request {
             Some(ride_request) => {
-                if is_leader {
-                    // Manejar la lógica como líder
-                    if let Err(err) = self.handle_ride_request_as_leader(ride_request) {
-                        eprintln!("Error handling ride request as leader: {}", err);
-                    }
-                    self.paid_rides.write().unwrap().insert(ride_request.id, ride_request);
-                } else {
-                    // Manejar la lógica como driver normal
-                    if let Err(err) = self.handle_ride_request_as_driver(ride_request, ctx.address()) {
-                        eprintln!("Error handling ride request as driver: {}", err);
-                    }
-                }
+               self.handle_ride_request_as_driver(ride_request, ctx.address()).unwrap()
             }
             None => {
                 eprintln!("RideRequest with id {} not found in pending_rides", msg.id);
@@ -267,23 +261,32 @@ impl Driver {
     /// * `port` - The port of the driver
     /// * `drivers_ports` - The list of driver ports TODO (leader should try to connect to them)
     pub async fn start(port: u16, mut drivers_ports: Vec<u16>) -> Result<(), io::Error> {
+        // Driver/leader attributes
         let should_be_leader = port == drivers_ports[LIDER_PORT_IDX];
         let is_leader = Arc::new(RwLock::new(should_be_leader));
         let leader_port = Arc::new(RwLock::new(drivers_ports[LIDER_PORT_IDX].clone()));
-        let mut active_drivers: HashMap<u16, (Option<ReadHalf<TcpStream>>, Option<WriteHalf<TcpStream>>)> = HashMap::new();
-        let pending_rides: Arc<RwLock<HashMap<u16, RideRequest>>> = Arc::new(RwLock::new(HashMap::new()));
         let mut write_half: Arc<RwLock<Option<WriteHalf<TcpStream>>>> = Arc::new(RwLock::new(None));
+
+        // Auxiliar structures
+        let mut active_drivers: HashMap<u16, (Option<ReadHalf<TcpStream>>, Option<WriteHalf<TcpStream>>)> = HashMap::new();
         let mut drivers_last_position: HashMap<u16, (i32, i32)> = HashMap::new();
+        let pending_rides: Arc<RwLock<HashMap<u16, RideRequest>>> = Arc::new(RwLock::new(HashMap::new()));
         let ride_and_offers: Arc::<RwLock<HashMap<u16, Vec<u16>>>> = Arc::new(RwLock::new(HashMap::new()));
         let mut streams_added = false;
+
+        // Payment app and connection
+        let mut payment_write_half: Option<WriteHalf<TcpStream>> = None;
+        let paid_rides: Arc<RwLock<HashMap<u16, RideRequest>>>= Arc::new(RwLock::new(HashMap::new()));
 
         // Remove the leader port from the list of drivers
         drivers_ports.remove(LIDER_PORT_IDX);
 
-        init::init_driver(&mut active_drivers, drivers_ports, &mut drivers_last_position, should_be_leader).await?;
+        init::init_driver(&mut active_drivers, drivers_ports, &mut drivers_last_position, should_be_leader, &mut payment_write_half).await?;
 
+        // Arcs for shared data
         let mut active_drivers_arc = Arc::new(RwLock::new(active_drivers));
         let mut drivers_last_position_arc = Arc::new(RwLock::new(drivers_last_position));
+        let mut payment_write_half_arc = Arc::new(RwLock::new(payment_write_half));
 
         let listener = TcpListener::bind(format!("127.0.0.1:{}", port)).await?;
         println!("WAITING FOR PASSENGERS TO CONNECT(leader) OR ACCEPTING LEADER(drivers)\n");
@@ -323,8 +326,8 @@ impl Driver {
                     write_half: write_half.clone(),
                     drivers_last_position: drivers_last_position_arc.clone(),
                     ride_and_offers: ride_and_offers.clone(),
-                    //payment_write_half,
-                    //TODO: inicializar paid_rides y payment_write_half
+                    payment_write_half: payment_write_half_arc.clone(),
+                    paid_rides: paid_rides.clone(),
 
                 }
             });
@@ -570,11 +573,11 @@ impl Driver {
     fn send_payment(&mut self, msg: RideRequest) -> Result<(), io::Error>{
         //TODO: Ver el tema de la cantidad pagada
         let message = SendPayment{id: msg.id, amount: 2399};
-        let msg = MessageType::SendPayment(message);
-        self.send_message_to_payment_app(msg)?;
+        self.send_message_to_payment_app(MessageType::SendPayment(message))?;
         Ok(())
     }
 
+    /// TODO: hacer una funcion generica que reciba mensaje y canal de escritura para no repetir codigo
     fn send_message_to_payment_app(&self, message: MessageType) -> Result<(), io::Error> {
         let write_half = Arc::clone(&self.payment_write_half);
         let serialized = serde_json::to_string(&message)?;

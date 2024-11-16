@@ -12,7 +12,7 @@ use std::net::SocketAddr;
 use tokio_stream::wrappers::LinesStream;
 use rand::Rng;
 
-const PROBABILITY_PAYMENT_REJECTED: f64 = 0.2;
+const PROBABILITY_PAYMENT_REJECTED: f64 = 0.001;
 
 
 // Mensajes
@@ -43,22 +43,12 @@ pub struct PaymentRejected {
     pub id: u16,
 }
 
-// Mensajes que enviará el lector al PaymentApp
-//#[derive(Message, Debug)]
-//#[rtype(result = "()")]
-//struct IncomingMessage(MessageType);
-
-
-
-
-
-
+/// ----------------------------------    Socket Reader   ----------------------------------  ///
 
 // Actor lector
 pub struct SocketReader {
     addr: SocketAddr,
     payment_app: Addr<PaymentApp>,
-    //read_half: ReadHalf<TcpStream>,
 }
 
 impl Actor for SocketReader {
@@ -67,7 +57,6 @@ impl Actor for SocketReader {
 
 impl SocketReader {
     pub fn new(addr: SocketAddr, payment_app: Addr<PaymentApp>) -> Self {
-        println!("SocketReader creado");
         Self {addr, payment_app}
     }
 
@@ -84,7 +73,9 @@ impl SocketReader {
 impl StreamHandler<Result<String, io::Error>> for SocketReader {
     fn handle(&mut self, read: Result<String, io::Error>, _ctx: &mut Self::Context) {
         if let Ok(line) = read {
+
             println!("Mensaje de {}: {}", self.addr, line);
+
             let message: MessageType = serde_json::from_str(&line).expect("Failed to deserialize message");
             match message {
                 MessageType::SendPayment(message) => {
@@ -101,12 +92,8 @@ impl StreamHandler<Result<String, io::Error>> for SocketReader {
 }
 
 
+/// ----------------------------------    Socket Writer   ----------------------------------  ///
 
-
-
-
-
-// Actor escritor
 pub struct SocketWriter {
     write_half: Arc<RwLock<WriteHalf<TcpStream>>>,
 }
@@ -120,11 +107,6 @@ impl SocketWriter {
         Self { write_half: Arc::new(RwLock::new(write_half)) }
     }
 }
-
-// Mensajes que PaymentApp puede enviar a SocketWriter
-//#[derive(Message, Debug)]
-//#[rtype(result = "()")]
-//struct OutgoingMessage(MessageType);
 
 impl Handler<PaymentAccepted> for SocketWriter {
     type Result = ();
@@ -176,9 +158,7 @@ impl Handler<PaymentRejected> for SocketWriter {
 
 
 
-
-
-
+///  ----------------------------------    Payment App   ----------------------------------  ///
 
 pub struct PaymentApp {
     rides_and_payments: HashMap<u16,i32>, //id, amount
@@ -197,8 +177,7 @@ impl Handler<SendPayment> for PaymentApp {
         if self.payment_is_accepted() {
             let payment_accepted = PaymentAccepted{id: msg.id};
             println!("Pago accepted");
-            self.rides_and_payments.insert(msg.id,msg.amount); //Lo agrego a los viajes aceptados
-            println!("Pago added");
+            self.rides_and_payments.insert(msg.id, msg.amount); //Lo agrego a los viajes aceptados
             self.writer.do_send(payment_accepted);
         }
         else {
@@ -224,7 +203,6 @@ impl PaymentApp {
         random_number > PROBABILITY_PAYMENT_REJECTED
     }
 }
-
 
 
 
