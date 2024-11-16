@@ -216,7 +216,7 @@ impl Handler<PaymentRejected> for Driver {
     type Result = ();
 
     fn handle(&mut self, msg: PaymentRejected, ctx: &mut Self::Context) -> Self::Result {
-        /// TODO: avisar al cliente que se rechazo el pago de viaje
+        // TODO: avisar al cliente que se rechazo el pago de viaje
     }
 
 }
