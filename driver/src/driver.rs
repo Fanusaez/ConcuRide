@@ -13,6 +13,7 @@ use tokio_stream::wrappers::LinesStream;
 use serde::{Serialize, Deserialize};
 use crate::init;
 
+
 /// RideRequest struct, ver como se puede importar desde otro archivo, esto esta en utils.rs\
 #[derive(Serialize, Deserialize, Message, Debug, Clone, Copy)]
 #[rtype(result = "()")]
@@ -45,6 +46,25 @@ pub struct FinishRide {
     pub driver_id: u16,
 }
 
+#[derive(Serialize, Deserialize, Message, Debug, Clone, Copy)]
+#[rtype(result = "()")]
+pub struct SendPayment {
+    pub id: u16,
+    pub amount: i32,
+}
+
+#[derive(Serialize, Deserialize, Message, Debug, Clone, Copy)]
+#[rtype(result = "()")]
+pub struct PaymentRejected {
+    pub id: u16,
+}
+
+#[derive(Serialize, Deserialize, Message, Debug, Clone, Copy)]
+#[rtype(result = "()")]
+pub struct PaymentAccepted {
+    pub id: u16,
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(tag = "message_type")]
 /// enum Message used to deserialize
@@ -53,6 +73,9 @@ pub enum MessageType {
     AcceptRide(AcceptRide),
     DeclineRide(DeclineRide),
     FinishRide(FinishRide),
+    SendPayment(SendPayment),
+    PaymentAccepted(PaymentAccepted),
+    PaymentRejected(PaymentRejected),
 }
 
 pub enum Sates {
@@ -95,6 +118,10 @@ pub struct Driver {
     /// Passenger last DriveRequest and the drivers who have been offered the ride
     /// Veremos si es necesario, sino lo podemos volar
     pub ride_and_offers: Arc::<RwLock<HashMap<u16, Vec<u16>>>>,
+    /// Connection to the payment app
+    pub payment_write_half: Arc<RwLock<Option<WriteHalf<TcpStream>>>>,
+    /// Already paid rides (ready to send to drivers)
+    pub paid_rides: Arc<RwLock<HashMap<u16, RideRequest>>>,
 }
 
 impl Actor for Driver {
@@ -106,7 +133,9 @@ impl StreamHandler<Result<String, io::Error>> for Driver {
     /// Matches the message type and sends it to the corresponding handler.
     fn handle(&mut self, read: Result<String, io::Error>, ctx: &mut Self::Context) {
         if let Ok(line) = read {
+            println!("Raw message received: {}", line);
             let message: MessageType = serde_json::from_str(&line).expect("Failed to deserialize message");
+            println!("Msg: {:?}", message);
             match message {
                 MessageType::RideRequest(coords)=> {
                     ctx.address().do_send(coords);
@@ -123,6 +152,18 @@ impl StreamHandler<Result<String, io::Error>> for Driver {
                 MessageType::FinishRide (finish_ride) => {
                     ctx.address().do_send(finish_ride);
                 }
+
+                MessageType::PaymentAccepted(payment_accepted) => {
+                    println!("Payment accepted msg received");
+                    ctx.address().do_send(payment_accepted);
+                }
+
+                MessageType::PaymentRejected(payment_rejected) => {
+                    ctx.address().do_send(payment_rejected);
+                }
+                _ => {
+                    println!("Unknown Message");
+                }
             }
         } else {
             println!("[{:?}] Failed to read line {:?}", self.id, read);
@@ -136,20 +177,57 @@ impl Handler<RideRequest> for Driver {
     /// Handles the ride request message depending on whether the driver is the leader or not.
     fn handle(&mut self, msg: RideRequest, ctx: &mut Self::Context) -> Self::Result {
         let is_leader = *self.is_leader.read().unwrap();
-
-        /// Aca iria el tema de la app de pagos
-
+        
         if is_leader {
-            self.handle_ride_request_as_leader(msg).expect("Error handling ride request as leader");
+            println!("Making reservation for payment of ride request from passenger {}", msg.id);
+            self.send_payment(msg).expect("Error sending payment");
         } else {
             self.handle_ride_request_as_driver(msg, ctx.address()).expect("Error handling ride request as driver");
         }
     }
 }
 
-impl Handler<AcceptRide> for Driver {
+
+impl Handler<PaymentAccepted> for Driver {
     type Result = ();
 
+    /// Only receved by leader
+    /// Handles the payment accepted message
+    fn handle(&mut self, msg: PaymentAccepted, ctx: &mut Self::Context) -> Self::Result {
+
+        println!("Leader {} received the payment accepted message for the ride request from passenger {}", self.id, msg.id);
+
+        /// Hay que remover antes de terminar?
+        let ride_request = {
+            let mut pending_rides = self.pending_rides.write().unwrap();
+            pending_rides.remove(&msg.id)
+        };
+
+        //TODO: hay que ver el tema de los ids de los viajes (No se deberian repetir?)
+        match ride_request {
+            Some(ride_request) => {
+               self.handle_ride_request_as_leader(ride_request).unwrap()
+            }
+            None => {
+                eprintln!("RideRequest with id {} not found in pending_rides", msg.id);
+            }
+        }
+    }
+}
+
+impl Handler<PaymentRejected> for Driver {
+    type Result = ();
+
+    fn handle(&mut self, msg: PaymentRejected, ctx: &mut Self::Context) -> Self::Result {
+        // TODO: avisar al cliente que se rechazo el pago de viaje
+    }
+
+}
+
+
+impl Handler<AcceptRide> for Driver {
+    type Result = ();
+    /// Only received by leader
     fn handle(&mut self, msg: AcceptRide, _ctx: &mut Self::Context) -> Self::Result {
         /// TODO: Sacar de ride_and_offers le id del pasajero y el driver que acepto dado que ya se acepto
         /// TODO: Pending_rides se saca una vez que notifico al pasajero
@@ -159,7 +237,7 @@ impl Handler<AcceptRide> for Driver {
 
 impl Handler<DeclineRide> for Driver {
     type Result = ();
-
+    /// Only received by leader
     fn handle(&mut self, msg: DeclineRide, _ctx: &mut Self::Context) -> Self::Result {
         println!("Lider {} received the declined message for the ride request from driver {}", self.id, msg.driver_id);
         // TODO: volver a elegir a quien ofrecer el viaje
@@ -187,23 +265,39 @@ impl Driver {
     /// * `port` - The port of the driver
     /// * `drivers_ports` - The list of driver ports TODO (leader should try to connect to them)
     pub async fn start(port: u16, mut drivers_ports: Vec<u16>) -> Result<(), io::Error> {
+        // Driver/leader attributes
         let should_be_leader = port == drivers_ports[LIDER_PORT_IDX];
         let is_leader = Arc::new(RwLock::new(should_be_leader));
         let leader_port = Arc::new(RwLock::new(drivers_ports[LIDER_PORT_IDX].clone()));
-        let mut active_drivers: HashMap<u16, (Option<ReadHalf<TcpStream>>, Option<WriteHalf<TcpStream>>)> = HashMap::new();
-        let pending_rides: Arc<RwLock<HashMap<u16, RideRequest>>> = Arc::new(RwLock::new(HashMap::new()));
         let mut write_half: Arc<RwLock<Option<WriteHalf<TcpStream>>>> = Arc::new(RwLock::new(None));
+
+        // Auxiliar structures
+        let mut active_drivers: HashMap<u16, (Option<ReadHalf<TcpStream>>, Option<WriteHalf<TcpStream>>)> = HashMap::new();
         let mut drivers_last_position: HashMap<u16, (i32, i32)> = HashMap::new();
+        let pending_rides: Arc<RwLock<HashMap<u16, RideRequest>>> = Arc::new(RwLock::new(HashMap::new()));
         let ride_and_offers: Arc::<RwLock<HashMap<u16, Vec<u16>>>> = Arc::new(RwLock::new(HashMap::new()));
         let mut streams_added = false;
+
+        // Payment app and connection
+        let mut payment_write_half: Option<WriteHalf<TcpStream>> = None;
+        let mut payment_read_half: Option<ReadHalf<TcpStream>> = None;
+
+        let paid_rides: Arc<RwLock<HashMap<u16, RideRequest>>>= Arc::new(RwLock::new(HashMap::new()));
 
         // Remove the leader port from the list of drivers
         drivers_ports.remove(LIDER_PORT_IDX);
 
-        init::init_driver(&mut active_drivers, drivers_ports, &mut drivers_last_position, should_be_leader).await?;
+        init::init_driver(&mut active_drivers, drivers_ports,
+                          &mut drivers_last_position,
+                          should_be_leader,
+                          &mut payment_write_half,
+                          &mut payment_read_half).await?;
 
+        // Arcs for shared data
         let mut active_drivers_arc = Arc::new(RwLock::new(active_drivers));
         let mut drivers_last_position_arc = Arc::new(RwLock::new(drivers_last_position));
+        let mut payment_write_half_arc = Arc::new(RwLock::new(payment_write_half));
+        let mut payment_read_half_arc = Arc::new(RwLock::new(payment_read_half));
 
         let listener = TcpListener::bind(format!("127.0.0.1:{}", port)).await?;
         println!("WAITING FOR PASSENGERS TO CONNECT(leader) OR ACCEPTING LEADER(drivers)\n");
@@ -230,6 +324,14 @@ impl Driver {
                             eprintln!("Driver {} no tiene un stream de lectura disponible", id);
                         }
                     }
+
+                    /// asocio el read del servicio de pagos al lider
+                    let mut payment_read_half = payment_read_half_arc.write().unwrap();
+                    if let Some(payment_read_half) = payment_read_half.take() {
+                        Driver::add_stream(LinesStream::new(BufReader::new(payment_read_half).lines()), ctx);
+                    } else {
+                        eprintln!("No hay un stream de lectura disponible para el servicio de pagos");
+                    }
                     streams_added = true;
                 }
                 Driver {
@@ -243,6 +345,9 @@ impl Driver {
                     write_half: write_half.clone(),
                     drivers_last_position: drivers_last_position_arc.clone(),
                     ride_and_offers: ride_and_offers.clone(),
+                    payment_write_half: payment_write_half_arc.clone(),
+                    paid_rides: paid_rides.clone(),
+
                 }
             });
         }
@@ -268,7 +373,7 @@ impl Driver {
 
     }
 
-    /// Handles the ride request from passanger
+    /// Handles the ride request from passanger, sends RideRequest to the closest driver
     /// TODO: LOGICA PARA VER A QUIEN SE LE DAN LOS VIAJES, ACA SE ESTA MANDANDO A TODOS
     /// # Arguments
     /// * `msg` - The message containing the ride request
@@ -481,6 +586,34 @@ impl Driver {
     fn finish_ride(&mut self, msg: FinishRide) -> Result<(), io::Error> {
         self.state = Sates::Idle;
         self.send_message(MessageType::FinishRide(msg))?;
+        Ok(())
+    }
+
+    fn send_payment(&mut self, msg: RideRequest) -> Result<(), io::Error>{
+        //TODO: Ver el tema de la cantidad pagada
+        let message = SendPayment{id: msg.id, amount: 2399};
+        self.send_message_to_payment_app(MessageType::SendPayment(message))?;
+        Ok(())
+    }
+
+    /// TODO: hacer una funcion generica que reciba mensaje y canal de escritura para no repetir codigo
+    fn send_message_to_payment_app(&self, message: MessageType) -> Result<(), io::Error> {
+        let write_half = Arc::clone(&self.payment_write_half);
+        let serialized = serde_json::to_string(&message)?;
+
+        actix::spawn(async move {
+            let mut write_guard = write_half.write().unwrap();
+
+            if let Some(write_half) = write_guard.as_mut() {
+                if let Err(e) = write_half.write_all(format!("{}\n", serialized).as_bytes()).await {
+                    eprintln!("Error al enviar el mensaje: {:?}", e);
+                }
+                println!("Payment sent");
+            } else {
+                eprintln!("No se pudo enviar el mensaje: no hay conexión activa");
+            }
+        });
+
         Ok(())
     }
 }
