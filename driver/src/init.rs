@@ -10,7 +10,8 @@ pub async fn init_driver(drivers_connections: &mut HashMap<u16, (Option<ReadHalf
                     drivers_ports: Vec<u16>,
                     drivers_last_position: &mut HashMap<u16, (i32, i32)>,
                     is_leader: bool,
-                    payment_write_half: &mut Option<WriteHalf<TcpStream>>) -> Result<(), io::Error> {
+                    payment_write_half: &mut Option<WriteHalf<TcpStream>>,
+                    payment_read_half: &mut Option<ReadHalf<TcpStream>>) -> Result<(), io::Error> {
     if is_leader {
         for driver_port in drivers_ports.iter() {
             let stream = TcpStream::connect(format!("127.0.0.1:{}", driver_port)).await?;
@@ -20,8 +21,10 @@ pub async fn init_driver(drivers_connections: &mut HashMap<u16, (Option<ReadHalf
         }
         // Conexión con el servicio de pagos (TODO: DEBERIA CONECTARSE SOLO SI ES LIDER)
         let payment_stream = TcpStream::connect(format!("127.0.0.1:{}", PAYMENT_APP_PORT)).await?;
-        let (_, write_half) = split(payment_stream);
+        let (read_half, write_half) = split(payment_stream);
         *payment_write_half = Some(write_half);
+        *payment_read_half = Some(read_half);
+
         Ok(())
     }
     else {

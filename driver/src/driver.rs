@@ -280,17 +280,24 @@ impl Driver {
 
         // Payment app and connection
         let mut payment_write_half: Option<WriteHalf<TcpStream>> = None;
+        let mut payment_read_half: Option<ReadHalf<TcpStream>> = None;
+
         let paid_rides: Arc<RwLock<HashMap<u16, RideRequest>>>= Arc::new(RwLock::new(HashMap::new()));
 
         // Remove the leader port from the list of drivers
         drivers_ports.remove(LIDER_PORT_IDX);
 
-        init::init_driver(&mut active_drivers, drivers_ports, &mut drivers_last_position, should_be_leader, &mut payment_write_half).await?;
+        init::init_driver(&mut active_drivers, drivers_ports,
+                          &mut drivers_last_position,
+                          should_be_leader,
+                          &mut payment_write_half,
+                          &mut payment_read_half).await?;
 
         // Arcs for shared data
         let mut active_drivers_arc = Arc::new(RwLock::new(active_drivers));
         let mut drivers_last_position_arc = Arc::new(RwLock::new(drivers_last_position));
         let mut payment_write_half_arc = Arc::new(RwLock::new(payment_write_half));
+        let mut payment_read_half_arc = Arc::new(RwLock::new(payment_read_half));
 
         let listener = TcpListener::bind(format!("127.0.0.1:{}", port)).await?;
         println!("WAITING FOR PASSENGERS TO CONNECT(leader) OR ACCEPTING LEADER(drivers)\n");
@@ -316,6 +323,14 @@ impl Driver {
                         } else {
                             eprintln!("Driver {} no tiene un stream de lectura disponible", id);
                         }
+                    }
+
+                    /// asocio el read del servicio de pagos al lider
+                    let mut payment_read_half = payment_read_half_arc.write().unwrap();
+                    if let Some(payment_read_half) = payment_read_half.take() {
+                        Driver::add_stream(LinesStream::new(BufReader::new(payment_read_half).lines()), ctx);
+                    } else {
+                        eprintln!("No hay un stream de lectura disponible para el servicio de pagos");
                     }
                     streams_added = true;
                 }
