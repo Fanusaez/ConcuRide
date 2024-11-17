@@ -1,24 +1,24 @@
 use std::hash::Hash;
 use std::io;
-use actix::{Actor, Context, StreamHandler, ActorFutureExt, Handler, Addr};
+use actix::{Actor, Context, StreamHandler, ActorFutureExt, Handler, Addr, AsyncContext};
 use actix_async_handler::async_handler;
-use serde::{Deserialize, Serialize};
 use tokio::io::{split, AsyncBufReadExt, AsyncWriteExt, BufReader, WriteHalf};
-use tokio::net::TcpStream;
-use tokio::sync::oneshot::Sender;
+use tokio::net::{TcpListener, TcpStream};
 use tokio_stream::wrappers::LinesStream;
-use crate::utils::RideRequest;
+
+use crate::models::*;
+
 const LEADER_PORT: u16 = 6000;
 
 
-#[derive(Serialize, Deserialize, Debug)]
-#[serde(tag = "message_type")]
-/// enum Message used to deserialize
-enum MessageType {
-    RideRequest(RideRequest),
-    StatusUpdate { status: String },
+pub enum Sates {
+    /// Before requesting a ride or after drop off
+    Idle,
+    /// After requesting a ride and paying, waiting for a driver to accept the ride
+    WaitingDriver,
+    /// Riding in a car
+    Traveling,
 }
-
 
 pub struct Passenger {
     /// The port of the passenger
@@ -27,10 +27,8 @@ pub struct Passenger {
     leader_port: u16,
     /// The actor that sends messages to the leader
     tcp_sender: Addr<TcpSender>,
-    /// The list of rides (coordinates) that the passenger has to go to
-    rides: Vec<RideRequest>,
-    /// The channel to send a completion signal to the main function
-    completion_signal: Option<Sender<()>>,
+    /// State of the passenger
+    state: Sates,
 }
 
 impl Actor for Passenger {
@@ -39,11 +37,18 @@ impl Actor for Passenger {
 
 /// Handles incoming messages from the leader
 impl StreamHandler<Result<String, io::Error>> for Passenger {
-    fn handle(&mut self, read: Result<String, io::Error>, _ctx: &mut Self::Context) {
+
+    fn handle(&mut self, read: Result<String, io::Error>, ctx: &mut Self::Context) {
         if let Ok(line) = read {
-            println!("{}", line);
-        } else {
-            println!("[{:?}] Failed to read line {:?}", self.id, read);
+            let message: MessageType = serde_json::from_str(&line).expect("Failed to deserialize message");
+            match message {
+                MessageType::FinishRide(finish_ride) => {
+                    ctx.address().do_send(finish_ride);
+                }
+                _ => {
+                    println!("Unknown Message");
+                }
+            }
         }
     }
 }
@@ -54,9 +59,23 @@ impl Handler<RideRequest> for Passenger {
 
     fn handle(&mut self, msg: RideRequest, _ctx: &mut Self::Context) -> Self::Result {
         println!("Mensaje recibido por el Passenger: {:?}", msg);
-        self.tcp_sender.try_send(msg).unwrap()
+        match self.tcp_sender.try_send(msg) {
+            Ok(_) => (),
+            Err(_) => println!("Error al enviar mensaje al TcpSender"),
+        }
     }
 }
+
+impl Handler<FinishRide> for Passenger {
+    type Result = ();
+
+    fn handle(&mut self, msg: FinishRide, _ctx: &mut Self::Context) -> Self::Result {
+        println!("Passenger with id {} finished ride with driver {}", msg.passenger_id, msg.driver_id);
+        self.state = Sates::Idle;
+        // TODO: hay que ver como manejarse aca, podria el pasajero leer su vector de rides y procesarlos? o solo 1 ride por pasajero
+    }
+}
+
 
 impl Passenger {
     /// Creates the actor and connects to the leader
@@ -64,33 +83,45 @@ impl Passenger {
     /// * `port` - The port of the passenger
     /// * `rides` - The list of rides (coordinates) that the passenger has to go to
     /// * `tx` - The channel to send a completion signal to the main function
-    pub async fn start(port: u16, rides: Vec<RideRequest>, tx: Sender<()>) -> Result<(), io::Error> {
+    pub async fn start(port: u16, rides: Vec<RideRequest>) -> Result<(), io::Error> {
         let stream = TcpStream::connect(format!("127.0.0.1:{}", crate::LEADER_PORT)).await?;
-        println!("Connected");
         let rides_clone = rides.clone();
-        let addr = Passenger::create(|ctx| {
-            let (read, write_half) = split(stream);
-            Passenger::add_stream(LinesStream::new(BufReader::new(read).lines()), ctx);
-            let write = Some(write_half);
-            let addr_tcp = TcpSender::new(write).start();
-            Passenger::new(port, addr_tcp, rides, tx)
-        });
+        let addr = Passenger::create_actor_instance(port, stream);
 
         // Send the rides to myself to be processed
         for ride in rides_clone {
             addr.send(ride).await.unwrap();
         }
 
+        /// listen for connections
+        let listener = TcpListener::bind(format!("127.0.0.1:{}", port)).await?;
+
+        /// Aca entrara solo cuando se caiga el lider, y un nuevo lider queira restablecer la conexion
+        while let Ok((stream,  _)) = listener.accept().await {
+            // TODO: cuando implemente mensajes, deberia escribirle al pasajero que se
+            // cayo el antiguo lider y que se conecto uno nuevo
+            // Deberia pasar el nuevo stream como un mensaje de actor, creo que en discord preguntaron
+        }
+
         Ok(())
     }
 
-    pub fn new(port: u16, tcp_sender: Addr<TcpSender>, coordinates: Vec<RideRequest>, tx: Sender<()>) -> Self {
+    fn create_actor_instance(port: u16, stream: TcpStream) -> Addr<Passenger> {
+        Passenger::create(|ctx| {
+            let (read, write_half) = split(stream);
+            Passenger::add_stream(LinesStream::new(BufReader::new(read).lines()), ctx);
+            let write = Some(write_half);
+            let addr_tcp = TcpSender::new(write).start();
+            Passenger::new(port, addr_tcp)
+        })
+    }
+
+    pub fn new(port: u16, tcp_sender: Addr<TcpSender>) -> Self {
         Passenger {
             id: port,
             leader_port: LEADER_PORT,
             tcp_sender,
-            rides: coordinates,
-            completion_signal: Some(tx),
+            state: Sates::Idle,
         }
     }
 }

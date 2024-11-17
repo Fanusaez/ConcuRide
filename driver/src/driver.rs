@@ -268,7 +268,7 @@ impl Driver {
 
     /// Generic function to send a message to the leader or the passenger
     /// This function use de write stream associated when actor created
-    fn send_message(&self, message: MessageType) -> Result<(), io::Error> {
+    pub fn send_message(&self, message: MessageType) -> Result<(), io::Error> {
         let write_half = Arc::clone(&self.write_half);
 
         let serialized = serde_json::to_string(&message)?;

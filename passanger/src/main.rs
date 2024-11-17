@@ -3,11 +3,11 @@ use actix::{Actor, ActorFutureExt, Handler, Message, StreamHandler, WrapFuture};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 use actix::prelude::*;
 use serde::Serialize;
-use tokio::sync::oneshot;
-use crate::utils::RideRequest;
+use crate::models::*;
 
 mod passenger;
 mod utils;
+mod models;
 
 const LEADER_PORT: u16 = 6000;
 
@@ -21,9 +21,6 @@ async fn main() -> std::io::Result<()> {
     let rides = utils::get_rides(orders_path)?;
 
     let rides_vec: Vec<RideRequest> = rides.iter().map(|(_, coordinates)| coordinates.clone()).collect();
-    let (tx, rx) = oneshot::channel();
-    Passenger::start(port, rides_vec, tx).await?;
-    let _ = rx.await;
-
+    Passenger::start(port, rides_vec).await?;
     Ok(())
 }

@@ -131,7 +131,9 @@ impl Handler<DeclineRide> for Driver {
 
 impl Handler<FinishRide> for Driver {
     type Result = ();
-
+    /// Message received by the leader and the driver
+    /// If the driver is the leader, will remove the ride from the pending rides and notify the passenger
+    /// If the driver is not the leader, will send the message to the leader
     fn handle(&mut self, msg: FinishRide, _ctx: &mut Self::Context) -> Self::Result {
         let is_leader = *self.is_leader.read().unwrap();
         if is_leader {
@@ -142,7 +144,13 @@ impl Handler<FinishRide> for Driver {
                     eprintln!("Error removing ride from pending rides: {:?}", e);
                 }
             }
-            // TODO: avisar al pasajero.
+            let msg_message_type = MessageType::FinishRide(msg);
+            match self.send_message(msg_message_type) {
+                Ok(_) => {}
+                Err(e) => {
+                    eprintln!("Error sending message to passenger: {:?}", e);
+                }
+            }
         } else {
             // driver send FinishRide to the leader and change state to Idle
             self.finish_ride(msg).unwrap()
