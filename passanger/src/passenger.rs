@@ -16,7 +16,7 @@ pub enum Sates {
     Idle,
     /// After requesting a ride and paying, waiting for a driver to accept the ride
     WaitingDriver,
-    /// Riding in a car
+    /// Riding in a car, necesario????
     Traveling,
 }
 
@@ -45,6 +45,9 @@ impl StreamHandler<Result<String, io::Error>> for Passenger {
                 MessageType::FinishRide(finish_ride) => {
                     ctx.address().do_send(finish_ride);
                 }
+                MessageType::DeclineRide(decline_ride) => {
+                    ctx.address().do_send(decline_ride);
+                }
                 _ => {
                     println!("Unknown Message");
                 }
@@ -58,7 +61,8 @@ impl Handler<RideRequest> for Passenger {
     type Result = ();
 
     fn handle(&mut self, msg: RideRequest, _ctx: &mut Self::Context) -> Self::Result {
-        println!("Mensaje recibido por el Passenger: {:?}", msg);
+        println!("Passenger with id {} requested a ride", self.id);
+        self.state = Sates::WaitingDriver;
         match self.tcp_sender.try_send(msg) {
             Ok(_) => (),
             Err(_) => println!("Error al enviar mensaje al TcpSender"),
@@ -76,6 +80,16 @@ impl Handler<FinishRide> for Passenger {
     }
 }
 
+
+impl Handler<DeclineRide> for Passenger {
+    type Result = ();
+
+    fn handle(&mut self, msg: DeclineRide, _ctx: &mut Self::Context) -> Self::Result {
+        println!("Passenger with id {} got declined message from Leader {}", msg.passenger_id, msg.driver_id);
+        self.state = Sates::Idle;
+        // TODO: hay que ver como manejarse aca, podria el pasajero leer su vector de rides y procesarlos? o solo 1 ride por pasajero
+    }
+}
 
 impl Passenger {
     /// Creates the actor and connects to the leader

@@ -93,7 +93,13 @@ impl Handler<PaymentRejected> for Driver {
     type Result = ();
 
     fn handle(&mut self, msg: PaymentRejected, ctx: &mut Self::Context) -> Self::Result {
-        // TODO: avisar al cliente que se rechazo el pago de viaje
+        let msg_message_type = MessageType::PaymentRejected(msg);
+        match self.send_message(msg_message_type) {
+            Ok(_) => {}
+            Err(e) => {
+                eprintln!("Error sending message to passenger: {:?}", e);
+            }
+        }
     }
 
 }
