@@ -6,6 +6,8 @@ mod driver;
 mod init;
 mod models;
 mod handlers;
+mod utils;
+mod ride_manager;
 
 /// Receives a port and creates driver actor
 #[actix_rt::main]

@@ -58,7 +58,7 @@ impl Handler<RideRequest> for Driver {
 
         if is_leader {
             println!("Leader recived ride request from passenger {}", msg.id);
-            self.insert_unpaid_ride(msg).expect("Error adding unpaid ride");
+            self.ride_manager.insert_unpaid_ride(msg).expect("Error adding unpaid ride");
             self.send_payment(msg).expect("Error sending payment");
         } else {
             self.handle_ride_request_as_driver(msg, ctx.address()).expect("Error handling ride request as driver");
@@ -72,23 +72,18 @@ impl Handler<PaymentAccepted> for Driver {
 
     /// Only receved by leader
     /// Handles the payment accepted message
-    fn handle(&mut self, msg: PaymentAccepted, ctx: &mut Self::Context) -> Self::Result {
+    fn handle(&mut self, msg: PaymentAccepted, _ctx: &mut Self::Context) -> Self::Result {
 
         println!("Leader {} received the payment accepted message for passenger with id {}", self.id, msg.id);
 
-        // Remove the ride from the unpaid rides
-        let ride_request = {
-            let mut unpaid_rides = self.unpaid_rides.write().unwrap();
-            unpaid_rides.remove(&msg.id)
-        };
+        let ride_request = self.ride_manager.remove_unpaid_ride(msg.id);
 
-        //TODO: hay que ver el tema de los ids de los viajes (No se deberian repetir?)
         match ride_request {
-            Some(ride_request) => {
+            Ok(ride_request) => {
                 self.handle_ride_request_as_leader(ride_request).unwrap()
             }
-            None => {
-                eprintln!("RideRequest with id {} not found in unpaid_rides", msg.id);
+            Err(e) => {
+                eprintln!("Error removing unpaid ride: {:?}", e);
             }
         }
     }
@@ -111,8 +106,12 @@ impl Handler<AcceptRide> for Driver {
     /// Remove the id of the passenger from ride_and_offers and notify the passenger?
     fn handle(&mut self, msg: AcceptRide, _ctx: &mut Self::Context) -> Self::Result {
         // remove the passenger id from ride_and_offers in case the passenger wants to take another ride
-        let mut ride_and_offers = self.ride_and_offers.write().unwrap();
-        ride_and_offers.remove(&msg.passenger_id);
+        match self.ride_manager.remove_from_ride_and_offers(msg.passenger_id) {
+            Ok(_) => {}
+            Err(e) => {
+                eprintln!("Error removing passenger id from ride_and_offers: {:?}", e);
+            }
+        }
 
         /// TODO: Pending_rides se saca una vez que notifico al pasajero
         println!("Ride with id {} was accepted by driver {}", msg.passenger_id, msg.driver_id);
@@ -126,8 +125,6 @@ impl Handler<DeclineRide> for Driver {
     /// TODO: OFFER THE RIDE TO ANOTHER DRIVER
     fn handle(&mut self, msg: DeclineRide, _ctx: &mut Self::Context) -> Self::Result {
         println!("Lider {} received the declined message for the ride request from driver {}", self.id, msg.driver_id);
-
-        self.remove_ride_from_unpaid(msg.passenger_id);
         // TODO: volver a elegir a quien ofrecer el viaje
     }
 }
@@ -139,7 +136,12 @@ impl Handler<FinishRide> for Driver {
         let is_leader = *self.is_leader.read().unwrap();
         if is_leader {
             println!("Passenger with id {} has been dropped off by driver with id {} ", msg.passenger_id, msg.driver_id);
-            self.remove_ride_from_pending(msg.passenger_id);
+            match self.ride_manager.remove_ride_from_pending(msg.passenger_id) {
+                Ok(_) => {}
+                Err(e) => {
+                    eprintln!("Error removing ride from pending rides: {:?}", e);
+                }
+            }
             // TODO: avisar al pasajero.
         } else {
             // driver send FinishRide to the leader and change state to Idle

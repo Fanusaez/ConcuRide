@@ -3,14 +3,15 @@ use std::collections::HashMap;
 use std::{io, thread};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
-use actix::{Actor, Addr, AsyncContext, Context, Handler, Message, StreamHandler};
-use rand::Rng;
+use actix::{Actor, Addr, AsyncContext, StreamHandler};
 use tokio::io::{split, AsyncBufReadExt, BufReader, AsyncWriteExt, WriteHalf, AsyncReadExt, ReadHalf};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_stream::wrappers::LinesStream;
 
 use crate::init;
 use crate::models::*;
+use crate::utils::*;
+use crate::ride_manager::*;
 
 pub enum Sates {
     Driving,
@@ -43,19 +44,14 @@ pub struct Driver {
     pub active_drivers: Arc<RwLock<HashMap<u16, (Option<ReadHalf<TcpStream>>, Option<WriteHalf<TcpStream>>)>>>,
     /// States of the driver
     pub state: Sates,
-    /// Pending rides, already paid rides, waiting to be accepted by a driver
-    pub pending_rides: Arc<RwLock<HashMap<u16, RideRequest>>>,
     /// Connection to the leader or the Passenger
     pub write_half: Arc<RwLock<Option<WriteHalf<TcpStream>>>>,
     /// Last known position of the driver (port, (x, y))
     pub drivers_last_position: Arc::<RwLock<HashMap<u16, (i32, i32)>>>,
-    /// Passenger last DriveRequest and the drivers who have been offered the ride
-    /// Veremos si es necesario, sino lo podemos volar
-    pub ride_and_offers: Arc::<RwLock<HashMap<u16, Vec<u16>>>>,
     /// Connection to the payment app
     pub payment_write_half: Arc<RwLock<Option<WriteHalf<TcpStream>>>>,
-    /// Already paid rides (ready to send to drivers)
-    pub unpaid_rides: Arc<RwLock<HashMap<u16, RideRequest>>>,
+    /// Ride manager, contains the pending rides, unpaid rides and the rides and offers
+    pub ride_manager: RideManager,
 }
 
 impl Driver {
@@ -140,12 +136,14 @@ impl Driver {
                     leader_port: leader_port.clone(),
                     active_drivers: active_drivers_arc.clone(),
                     state: Sates::Idle,
-                    pending_rides: pending_rides.clone(),
                     write_half: write_half.clone(),
                     drivers_last_position: drivers_last_position_arc.clone(),
-                    ride_and_offers: ride_and_offers.clone(),
                     payment_write_half: payment_write_half_arc.clone(),
-                    unpaid_rides: unpaid_rides.clone(),
+                    ride_manager: RideManager {
+                        pending_rides: pending_rides.clone(),
+                        unpaid_rides: unpaid_rides.clone(),
+                        ride_and_offers: ride_and_offers.clone(),
+                    },
 
                 }
             });
@@ -179,13 +177,13 @@ impl Driver {
     pub fn handle_ride_request_as_leader(&mut self, msg: RideRequest) -> Result<(), io::Error>{
 
         /// saves ride in pending_rides
-        self.insert_ride_in_pending(msg)?;
+        self.ride_manager.insert_ride_in_pending(msg)?;
 
         /// Logica de a quien se le manda el mensaje
         let driver_id_to_send = self.get_closest_driver(msg);
 
         /// Agrego el id del driver al vector de ofertas
-        self.insert_in_rides_and_offers(msg.id, driver_id_to_send)?;
+        self.ride_manager.insert_in_rides_and_offers(msg.id, driver_id_to_send)?;
 
 
         let mut active_drivers_clone = Arc::clone(&self.active_drivers);
@@ -290,70 +288,6 @@ impl Driver {
         Ok(())
     }
 
-    /// Returns the id to the closest driver to the passenger
-    /// # Arguments
-    /// * `message` - The message containing the ride request
-    /// # Returns
-    /// The id of the closest driver
-    fn get_closest_driver(&self, message: RideRequest) -> u16 {
-        // PickUp position
-        let (x_passenger, y_passenger) = (message.x_origin as i32, message.y_origin as i32);
-
-        let drivers_last_position = self.drivers_last_position.read().unwrap();
-        let mut closest_driver = 0;
-        let mut min_distance = i32::MAX;
-
-
-        for (driver_id, (x_driver, y_driver)) in drivers_last_position.iter() {
-            let distance = (x_passenger - x_driver).abs() + (y_passenger - y_driver).abs();
-            if distance < min_distance {
-                min_distance = distance;
-                closest_driver = *driver_id;
-            }
-        }
-        closest_driver
-    }
-
-    /// Inserts a ride in the pending rides
-    /// # Arguments
-    /// * `msg` - The message containing the ride request
-    fn insert_ride_in_pending(&self, msg: RideRequest) -> Result<(), io::Error> {
-        // Lo pongo el pending_rides hasta que alguien acepte el viaje
-        let mut pending_rides = self.pending_rides.write();
-        match pending_rides {
-            Ok(mut pending_rides) => {
-                pending_rides.insert(msg.id.clone(), msg.clone());
-            },
-            Err(e) => {
-                eprintln!("Error al obtener el lock de escritura en `pending_rides`: {:?}", e);
-                return Err(io::Error::new(io::ErrorKind::Other, "Error al obtener el lock de escritura en `pending_rides`"));
-            }
-        }
-        Ok(())
-    }
-
-    /// Inserts the passenger id and the driver id in the ride_and_offers hashmap
-    /// # Arguments
-    /// * `passenger_id` - The id of the passenger
-    /// * `driver_id` - The id of the driver
-    fn insert_in_rides_and_offers(&self, passenger_id: u16, driver_id: u16) -> Result<(), io::Error> {
-        let mut ride_and_offers = self.ride_and_offers.write();
-        match ride_and_offers {
-            Ok(mut ride_and_offers) => {
-                if let Some(offers) = ride_and_offers.get_mut(&passenger_id) {
-                    offers.push(driver_id);
-                } else {
-                    ride_and_offers.insert(passenger_id, vec![driver_id]);
-                }
-            },
-            Err(e) => {
-                eprintln!("Error al obtener el lock de escritura en `ride_and_offers`: {:?}", e);
-                return Err(io::Error::new(io::ErrorKind::Other, "Error al obtener el lock de escritura en `ride_and_offers`"));
-            }
-        }
-        Ok(())
-    }
-
     /// Drive to the destination and finish the ride
     /// # Arguments
     /// * `msg` - The message containing the ride request
@@ -415,40 +349,31 @@ impl Driver {
         Ok(())
     }
 
-    /// Upon receiving a ride request, the leader will add it to the unpaid rides
+    /// -------------------------------------------  AUXILIARY FUNCTIONS ------------------------------------------- ///
+
+
+    /// Returns the id to the closest driver to the passenger
     /// # Arguments
-    /// * `msg` - The message containing the ride request
-    pub fn insert_unpaid_ride(&self, msg: RideRequest) -> Result<(), io::Error> {
-        let mut unpaid_rides = self.unpaid_rides.write();
-        match unpaid_rides {
-            Ok(mut unpaid_rides) => {
-                unpaid_rides.insert(msg.id.clone(), msg.clone());
-            },
-            Err(e) => {
-                eprintln!("Error al obtener el lock de escritura en `unpaid_rides`: {:?}", e);
-                return Err(io::Error::new(io::ErrorKind::Other, "Error al obtener el lock de escritura en `unpaid_rides`"));
+    /// * `message` - The message containing the ride request
+    /// # Returns
+    /// The id of the closest driver
+    fn get_closest_driver(&self, message: RideRequest) -> u16 {
+        // PickUp position
+        let (x_passenger, y_passenger) = (message.x_origin as i32, message.y_origin as i32);
+
+        let drivers_last_position = self.drivers_last_position.read().unwrap();
+        let mut closest_driver = 0;
+        let mut min_distance = i32::MAX;
+
+
+        for (driver_id, (x_driver, y_driver)) in drivers_last_position.iter() {
+            let distance = (x_passenger - x_driver).abs() + (y_passenger - y_driver).abs();
+            if distance < min_distance {
+                min_distance = distance;
+                closest_driver = *driver_id;
             }
         }
-        Ok(())
+        closest_driver
     }
 
-    pub fn remove_ride_from_pending(&self, passenger_id: u16) {
-        let mut pending_rides = self.pending_rides.write().unwrap();
-        if (pending_rides.remove(&passenger_id)).is_none() {
-            eprintln!("RideRequest with id {} not found in pending_rides", passenger_id);
-        }
-    }
-
-    pub fn remove_ride_from_unpaid(&self, passenger_id: u16) {
-        let mut unpaid_rides = self.unpaid_rides.write().unwrap();
-        if (unpaid_rides.remove(&passenger_id)).is_none() {
-            eprintln!("RideRequest with id {} not found in unpaid_rides", passenger_id);
-        }
-    }
-
-}
-
-pub fn boolean_with_probability(probability: f64) -> bool {
-    let mut rng = rand::thread_rng();
-    rng.gen::<f64>() < probability
 }
