@@ -1,82 +1,16 @@
 use std::cmp::PartialEq;
 use std::collections::HashMap;
 use std::{io, thread};
-use std::sync::{mpsc, Arc, RwLock};
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use actix::{Actor, Addr, AsyncContext, Context, Handler, Message, StreamHandler};
-use actix_async_handler::async_handler;
-use futures::future::MaybeDone::Future;
 use rand::Rng;
 use tokio::io::{split, AsyncBufReadExt, BufReader, AsyncWriteExt, WriteHalf, AsyncReadExt, ReadHalf};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_stream::wrappers::LinesStream;
-use serde::{Serialize, Deserialize};
+
 use crate::init;
-
-
-/// RideRequest struct, ver como se puede importar desde otro archivo, esto esta en utils.rs\
-#[derive(Serialize, Deserialize, Message, Debug, Clone, Copy)]
-#[rtype(result = "()")]
-pub struct RideRequest {
-    pub id: u16,
-    pub x_origin: u16,
-    pub y_origin: u16,
-    pub x_dest: u16,
-    pub y_dest: u16,
-}
-
-#[derive(Serialize, Deserialize, Message, Debug, Clone, Copy)]
-#[rtype(result = "()")]
-pub struct AcceptRide {
-    pub passenger_id: u16,
-    pub driver_id: u16,
-}
-
-#[derive(Serialize, Deserialize, Message, Debug, Clone, Copy)]
-#[rtype(result = "()")]
-pub struct DeclineRide {
-    pub passenger_id: u16,
-    pub driver_id: u16,
-}
-
-#[derive(Serialize, Deserialize, Message, Debug, Clone, Copy)]
-#[rtype(result = "()")]
-pub struct FinishRide {
-    pub passenger_id: u16,
-    pub driver_id: u16,
-}
-
-#[derive(Serialize, Deserialize, Message, Debug, Clone, Copy)]
-#[rtype(result = "()")]
-pub struct SendPayment {
-    pub id: u16,
-    pub amount: i32,
-}
-
-#[derive(Serialize, Deserialize, Message, Debug, Clone, Copy)]
-#[rtype(result = "()")]
-pub struct PaymentRejected {
-    pub id: u16,
-}
-
-#[derive(Serialize, Deserialize, Message, Debug, Clone, Copy)]
-#[rtype(result = "()")]
-pub struct PaymentAccepted {
-    pub id: u16,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-#[serde(tag = "message_type")]
-/// enum Message used to deserialize
-pub enum MessageType {
-    RideRequest(RideRequest),
-    AcceptRide(AcceptRide),
-    DeclineRide(DeclineRide),
-    FinishRide(FinishRide),
-    SendPayment(SendPayment),
-    PaymentAccepted(PaymentAccepted),
-    PaymentRejected(PaymentRejected),
-}
+use crate::models::*;
 
 pub enum Sates {
     Driving,
@@ -122,150 +56,6 @@ pub struct Driver {
     pub payment_write_half: Arc<RwLock<Option<WriteHalf<TcpStream>>>>,
     /// Already paid rides (ready to send to drivers)
     pub unpaid_rides: Arc<RwLock<HashMap<u16, RideRequest>>>,
-}
-
-impl Actor for Driver {
-    type Context = Context<Self>;
-}
-
-impl StreamHandler<Result<String, io::Error>> for Driver {
-    /// Handles the messages coming from the associated stream.
-    /// Matches the message type and sends it to the corresponding handler.
-    fn handle(&mut self, read: Result<String, io::Error>, ctx: &mut Self::Context) {
-        if let Ok(line) = read {
-            let message: MessageType = serde_json::from_str(&line).expect("Failed to deserialize message");
-            match message {
-                MessageType::RideRequest(coords)=> {
-                    ctx.address().do_send(coords);
-                }
-
-                MessageType::AcceptRide (accept_ride) => {
-                    ctx.address().do_send(accept_ride);
-                }
-
-                MessageType::DeclineRide (decline_ride) => {
-                    ctx.address().do_send(decline_ride);
-                }
-
-                MessageType::FinishRide (finish_ride) => {
-                    ctx.address().do_send(finish_ride);
-                }
-
-                MessageType::PaymentAccepted(payment_accepted) => {
-                    println!("Payment accepted msg received");
-                    ctx.address().do_send(payment_accepted);
-                }
-
-                MessageType::PaymentRejected(payment_rejected) => {
-                    ctx.address().do_send(payment_rejected);
-                }
-                _ => {
-                    println!("Unknown Message");
-                }
-            }
-        } else {
-            println!("[{:?}] Failed to read line {:?}", self.id, read);
-        }
-    }
-}
-
-impl Handler<RideRequest> for Driver {
-    type Result = ();
-
-    /// Handles the ride request message depending on whether the driver is the leader or not.
-    fn handle(&mut self, msg: RideRequest, ctx: &mut Self::Context) -> Self::Result {
-        let is_leader = *self.is_leader.read().unwrap();
-        
-        if is_leader {
-            println!("Leader recived ride request from passenger {}", msg.id);
-            self.insert_unpaid_ride(msg).expect("Error adding unpaid ride");
-            self.send_payment(msg).expect("Error sending payment");
-        } else {
-            self.handle_ride_request_as_driver(msg, ctx.address()).expect("Error handling ride request as driver");
-        }
-    }
-}
-
-
-impl Handler<PaymentAccepted> for Driver {
-    type Result = ();
-
-    /// Only receved by leader
-    /// Handles the payment accepted message
-    fn handle(&mut self, msg: PaymentAccepted, ctx: &mut Self::Context) -> Self::Result {
-
-        println!("Leader {} received the payment accepted message for passenger with id {}", self.id, msg.id);
-
-        // Remove the ride from the unpaid rides
-        let ride_request = {
-            let mut unpaid_rides = self.unpaid_rides.write().unwrap();
-            unpaid_rides.remove(&msg.id)
-        };
-
-        //TODO: hay que ver el tema de los ids de los viajes (No se deberian repetir?)
-        match ride_request {
-            Some(ride_request) => {
-               self.handle_ride_request_as_leader(ride_request).unwrap()
-            }
-            None => {
-                eprintln!("RideRequest with id {} not found in unpaid_rides", msg.id);
-            }
-        }
-    }
-}
-
-impl Handler<PaymentRejected> for Driver {
-    type Result = ();
-
-    fn handle(&mut self, msg: PaymentRejected, ctx: &mut Self::Context) -> Self::Result {
-        // TODO: avisar al cliente que se rechazo el pago de viaje
-    }
-
-}
-
-
-impl Handler<AcceptRide> for Driver {
-    type Result = ();
-    /// Only received by leader
-    /// Ride offered made to driver was accepted
-    /// Remove the id of the passenger from ride_and_offers and notify the passenger?
-    fn handle(&mut self, msg: AcceptRide, _ctx: &mut Self::Context) -> Self::Result {
-        // remove the passenger id from ride_and_offers in case the passenger wants to take another ride
-        let mut ride_and_offers = self.ride_and_offers.write().unwrap();
-        ride_and_offers.remove(&msg.passenger_id);
-
-        /// TODO: Pending_rides se saca una vez que notifico al pasajero
-        println!("Ride with id {} was accepted by driver {}", msg.passenger_id, msg.driver_id);
-    }
-}
-
-impl Handler<DeclineRide> for Driver {
-    type Result = ();
-    /// Only received by leader
-    /// Ride offered made to driver was declined
-    /// TODO: OFFER THE RIDE TO ANOTHER DRIVER
-    fn handle(&mut self, msg: DeclineRide, _ctx: &mut Self::Context) -> Self::Result {
-        println!("Lider {} received the declined message for the ride request from driver {}", self.id, msg.driver_id);
-
-        self.remove_ride_from_unpaid(msg.passenger_id);
-        // TODO: volver a elegir a quien ofrecer el viaje
-    }
-}
-
-impl Handler<FinishRide> for Driver {
-    type Result = ();
-
-    fn handle(&mut self, msg: FinishRide, _ctx: &mut Self::Context) -> Self::Result {
-        let is_leader = *self.is_leader.read().unwrap();
-        if is_leader {
-            println!("Passenger with id {} has been dropped off by driver with id {} ", msg.passenger_id, msg.driver_id);
-            self.remove_ride_from_pending(msg.passenger_id);
-            // TODO: avisar al pasajero.
-        } else {
-            // driver send FinishRide to the leader and change state to Idle
-            self.finish_ride(msg).unwrap()
-        }
-    }
 }
 
 impl Driver {
@@ -592,13 +382,13 @@ impl Driver {
     /// Finish the ride, send the FinishRide message to the leader
     /// # Arguments
     /// * `msg` - The message containing the ride request
-    fn finish_ride(&mut self, msg: FinishRide) -> Result<(), io::Error> {
+    pub fn finish_ride(&mut self, msg: FinishRide) -> Result<(), io::Error> {
         self.state = Sates::Idle;
         self.send_message(MessageType::FinishRide(msg))?;
         Ok(())
     }
 
-    fn send_payment(&mut self, msg: RideRequest) -> Result<(), io::Error>{
+    pub fn send_payment(&mut self, msg: RideRequest) -> Result<(), io::Error>{
         //TODO: Ver el tema de la cantidad pagada
         let message = SendPayment{id: msg.id, amount: 2399};
         self.send_message_to_payment_app(MessageType::SendPayment(message))?;
@@ -628,7 +418,7 @@ impl Driver {
     /// Upon receiving a ride request, the leader will add it to the unpaid rides
     /// # Arguments
     /// * `msg` - The message containing the ride request
-    fn insert_unpaid_ride(&self, msg: RideRequest) -> Result<(), io::Error> {
+    pub fn insert_unpaid_ride(&self, msg: RideRequest) -> Result<(), io::Error> {
         let mut unpaid_rides = self.unpaid_rides.write();
         match unpaid_rides {
             Ok(mut unpaid_rides) => {
@@ -642,14 +432,14 @@ impl Driver {
         Ok(())
     }
 
-    fn remove_ride_from_pending(&self, passenger_id: u16) {
+    pub fn remove_ride_from_pending(&self, passenger_id: u16) {
         let mut pending_rides = self.pending_rides.write().unwrap();
         if (pending_rides.remove(&passenger_id)).is_none() {
             eprintln!("RideRequest with id {} not found in pending_rides", passenger_id);
         }
     }
 
-    fn remove_ride_from_unpaid(&self, passenger_id: u16) {
+    pub fn remove_ride_from_unpaid(&self, passenger_id: u16) {
         let mut unpaid_rides = self.unpaid_rides.write().unwrap();
         if (unpaid_rides.remove(&passenger_id)).is_none() {
             eprintln!("RideRequest with id {} not found in unpaid_rides", passenger_id);

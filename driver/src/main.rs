@@ -1,9 +1,11 @@
 use std::io::{Read};
-use actix_rt::System;
+
 use crate::driver::Driver;
 
 mod driver;
 mod init;
+mod models;
+mod handlers;
 
 /// Receives a port and creates driver actor
 #[actix_rt::main]
