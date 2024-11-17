@@ -8,11 +8,11 @@ use crate::models::*;
 
 pub struct RideManager {
     /// Pending rides, already paid rides, waiting to be accepted by a driver
-    pub(crate) pending_rides: Arc<RwLock<HashMap<u16, RideRequest>>>,
+    pub pending_rides: Arc<RwLock<HashMap<u16, RideRequest>>>,
     /// Unpaid rides, waiting for payment confirmation
-    pub(crate) unpaid_rides: Arc<RwLock<HashMap<u16, RideRequest>>>,
+    pub unpaid_rides: Arc<RwLock<HashMap<u16, RideRequest>>>,
     /// Passenger last DriveRequest and the drivers who have been offered the ride
-    pub(crate) ride_and_offers: Arc<RwLock<HashMap<u16, Vec<u16>>>>,
+    pub ride_and_offers: Arc<RwLock<HashMap<u16, Vec<u16>>>>,
 }
 
 impl RideManager {
