@@ -147,7 +147,7 @@ impl Handler<PaymentRejected> for SocketWriter {
             let mut write_half = write_half.write().await;
 
             // Escribir el mensaje serializado en el socket
-            if let Err(e) = write_half.write_all(json_message.as_bytes()).await {
+            if let Err(e) = write_half.write_all(format!("{}\n", json_message).as_bytes()).await {
                 eprintln!("Error escribiendo en el socket: {:?}", e);
             }
             println!("Payment rejected sent");

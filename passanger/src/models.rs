@@ -26,6 +26,12 @@ pub struct DeclineRide {
     pub driver_id: u16,
 }
 
+#[derive(Serialize, Deserialize, Message, Debug, Clone, Copy)]
+#[rtype(result = "()")]
+pub struct PaymentRejected {
+    pub id: u16,
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(tag = "message_type")]
 /// enum Message used to deserialize
@@ -33,4 +39,5 @@ pub enum MessageType {
     RideRequest(RideRequest),
     FinishRide(FinishRide),
     DeclineRide(DeclineRide),
+    PaymentRejected(PaymentRejected),
 }

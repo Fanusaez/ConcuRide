@@ -48,6 +48,9 @@ impl StreamHandler<Result<String, io::Error>> for Passenger {
                 MessageType::DeclineRide(decline_ride) => {
                     ctx.address().do_send(decline_ride);
                 }
+                MessageType::PaymentRejected(payment_rejected) => {
+                    ctx.address().do_send(payment_rejected);
+                }
                 _ => {
                     println!("Unknown Message");
                 }
@@ -89,6 +92,12 @@ impl Handler<DeclineRide> for Passenger {
         self.state = Sates::Idle;
         // TODO: hay que ver como manejarse aca, podria el pasajero leer su vector de rides y procesarlos? o solo 1 ride por pasajero
     }
+}
+
+impl Handler<PaymentRejected> for Passenger {
+    type Result = ();
+
+    fn handle(&mut self, msg: PaymentRejected, _ctx: &mut Self::Context) -> Self::Result {}
 }
 
 impl Passenger {
