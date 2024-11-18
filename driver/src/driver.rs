@@ -47,7 +47,7 @@ pub struct Driver {
     /// Connection to the leader or the Passenger
     pub write_half: Arc<RwLock<Option<WriteHalf<TcpStream>>>>,
     /// Last known position of the driver (port, (x, y))
-    pub drivers_last_position: Arc::<RwLock<HashMap<u16, (i32, i32)>>>,
+    pub drivers_last_position: Arc<RwLock<HashMap<u16, (i32, i32)>>>,
     /// Connection to the payment app
     pub payment_write_half: Arc<RwLock<Option<WriteHalf<TcpStream>>>>,
     /// Ride manager, contains the pending rides, unpaid rides and the rides and offers
@@ -59,8 +59,8 @@ impl Driver {
     /// # Arguments
     /// * `port` - The port of the driver
     /// * `drivers_ports` - The list of driver ports TODO (leader should try to connect to them)
-    pub async fn start(port: u16, mut drivers_ports: Vec<u16>) -> Result<(), io::Error> {
-        // Driver/leader attributes
+    pub async fn start(port: u16, mut drivers_ports: Vec<u16>, position: (i32, i32)) -> Result<(), io::Error> {
+        // Driver-leader attributes
         let should_be_leader = port == drivers_ports[LIDER_PORT_IDX];
         let is_leader = Arc::new(RwLock::new(should_be_leader));
         let leader_port = Arc::new(RwLock::new(drivers_ports[LIDER_PORT_IDX].clone()));
@@ -131,7 +131,7 @@ impl Driver {
                 }
                 Driver {
                     id: port,
-                    position: (0, 0), // Arrancan en el origen por comodidad, ver despues que onda
+                    position, // Arrancan en el origen por comodidad, ver despues que onda
                     is_leader: is_leader.clone(),
                     leader_port: leader_port.clone(),
                     active_drivers: active_drivers_arc.clone(),
@@ -185,7 +185,12 @@ impl Driver {
         /// Agrego el id del driver al vector de ofertas
         self.ride_manager.insert_in_rides_and_offers(msg.id, driver_id_to_send)?;
 
+        /// Envio el mensaje al driver
+        self.send_ride_request_to_driver(driver_id_to_send, msg)?;
+        Ok(())
+    }
 
+    pub fn send_ride_request_to_driver(&mut self, driver_id: u16, msg: RideRequest) -> Result<(), io::Error> {
         let mut active_drivers_clone = Arc::clone(&self.active_drivers);
         let msg_clone = msg.clone();
 
@@ -198,7 +203,7 @@ impl Driver {
                 }
             };
 
-            if let Some((_, write_half)) = active_drivers.get_mut(&driver_id_to_send) {
+            if let Some((_, write_half)) = active_drivers.get_mut(&driver_id) {
                 let response = MessageType::RideRequest(msg_clone);
                 let serialized = match serde_json::to_string(&response) {
                     Ok(s) => s,
@@ -221,7 +226,6 @@ impl Driver {
         });
         Ok(())
     }
-
 
     /// Sends the AcceptRide message to the leader
     /// # Arguments

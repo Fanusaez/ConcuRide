@@ -12,7 +12,7 @@ use std::net::SocketAddr;
 use tokio_stream::wrappers::LinesStream;
 use rand::Rng;
 
-const PROBABILITY_PAYMENT_REJECTED: f64 = 0.99;
+const PROBABILITY_PAYMENT_REJECTED: f64 = 0.01;
 
 
 // Mensajes
