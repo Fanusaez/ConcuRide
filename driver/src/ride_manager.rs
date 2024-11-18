@@ -118,4 +118,24 @@ impl RideManager {
             Err(io::Error::new(io::ErrorKind::NotFound, "RideRequest not found in unpaid_rides"))
         }
     }
+
+    /// Gets a copy of the Ride Request from the pending rides
+    /// # Arguments
+    /// * `passenger_id` - The id of the passenger
+    /// # Returns
+    /// * A copy of the RideRequest
+    pub fn get_pending_ride_request(&self, passenger_id: u16) -> Result<RideRequest, io::Error> {
+        let pending_rides = self.pending_rides.read().map_err(|e| {
+            eprintln!("Error al obtener el lock de lectura en `pending_rides`: {:?}", e);
+            io::Error::new(io::ErrorKind::Other, "Error al obtener el lock de lectura en `pending_rides`")
+        })?;
+
+        if let Some(ride_request) = pending_rides.get(&passenger_id) {
+            Ok(ride_request.clone())
+        } else {
+            eprintln!("RideRequest with id {} not found in pending_rides", passenger_id);
+            Err(io::Error::new(io::ErrorKind::NotFound, "RideRequest not found in pending_rides"))
+        }
+
+    }
 }

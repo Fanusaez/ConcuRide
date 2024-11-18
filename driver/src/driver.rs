@@ -170,11 +170,11 @@ impl Driver {
 
     }
 
-    /// Handles the ride request from passanger, sends RideRequest to the closest driver
+    /// Handles the ride request from passenger, sends RideRequest to the closest driver
     /// TODO: LOGICA PARA VER A QUIEN SE LE DAN LOS VIAJES, ACA SE ESTA MANDANDO A TODOS
     /// # Arguments
     /// * `msg` - The message containing the ride request
-    pub fn handle_ride_request_as_leader(&mut self, msg: RideRequest) -> Result<(), io::Error>{
+    pub fn handle_ride_request_as_leader(&mut self, msg: RideRequest) -> Result<(), io::Error> {
 
         /// saves ride in pending_rides
         self.ride_manager.insert_ride_in_pending(msg)?;
@@ -182,11 +182,12 @@ impl Driver {
         /// Logica de a quien se le manda el mensaje
         let driver_id_to_send = self.get_closest_driver(msg);
 
+        /// Envio el mensaje al driver
+        self.send_ride_request_to_driver(driver_id_to_send, msg)?;
+
         /// Agrego el id del driver al vector de ofertas
         self.ride_manager.insert_in_rides_and_offers(msg.id, driver_id_to_send)?;
 
-        /// Envio el mensaje al driver
-        self.send_ride_request_to_driver(driver_id_to_send, msg)?;
         Ok(())
     }
 
@@ -224,6 +225,32 @@ impl Driver {
                 eprintln!("No se encontró un `write_half` para el `driver_id_to_send` especificado");
             }
         });
+        Ok(())
+    }
+
+    /// Handles the declined ride from driver as leader
+    /// Sends the ride request to the next closest driver and adds the driver to the offers
+    /// # Arguments
+    /// * `msg` - The message containing the Declined Ride
+    pub fn handle_declined_ride_as_leader(&mut self, msg: DeclineRide) -> Result<(), io::Error> {
+        let mut ride_request = self.ride_manager.get_pending_ride_request(msg.passenger_id)?;
+
+        /// Logica de a quien se le manda el mensaje
+        let driver_id_to_send = self.get_closest_driver(ride_request);
+
+        /// TODO: Hay que ver como manejar este caso, lo que se podria hacer es eliminar todos los ids
+        /// de los driver a los que se les ofrecieron y arrancar de nuevo.
+        if driver_id_to_send == 0 {
+            println!("No hay drivers disponibles para el pasajero con id {}", msg.passenger_id);
+            return Ok(());
+        }
+
+        /// Envio el mensaje al driver
+        self.send_ride_request_to_driver(driver_id_to_send, ride_request)?;
+
+        /// Agrego el id del driver al vector de ofertas
+        self.ride_manager.insert_in_rides_and_offers(ride_request.id, driver_id_to_send)?;
+
         Ok(())
     }
 
@@ -356,12 +383,13 @@ impl Driver {
     /// -------------------------------------------  AUXILIARY FUNCTIONS ------------------------------------------- ///
 
 
-    /// Returns the id to the closest driver to the passenger
+    /// Returns the id to the closest driver to the passenger that has not been already offered the ride
+    /// In case there is no driver available, it returns 0 (TODO: VER SI ESTO ESTA BIEN, QUIZAS HAYA QUE HACERLO MEJOR)
     /// # Arguments
     /// * `message` - The message containing the ride request
     /// # Returns
     /// The id of the closest driver
-    fn get_closest_driver(&self, message: RideRequest) -> u16 {
+    pub fn get_closest_driver(&self, message: RideRequest) -> u16 {
         // PickUp position
         let (x_passenger, y_passenger) = (message.x_origin as i32, message.y_origin as i32);
 
@@ -369,8 +397,17 @@ impl Driver {
         let mut closest_driver = 0;
         let mut min_distance = i32::MAX;
 
+        let offers_and_rides = self.ride_manager.ride_and_offers.read().unwrap();
+
 
         for (driver_id, (x_driver, y_driver)) in drivers_last_position.iter() {
+
+            // Si el driver que estoy viendo ya fue ofrecido el viaje, lo salteo
+            // TODO: VER MANEJO DE ERRORES
+            if offers_and_rides.contains_key(&message.id) && offers_and_rides.get(&message.id).unwrap().contains(driver_id) {
+                continue;
+            }
+
             let distance = (x_passenger - x_driver).abs() + (y_passenger - y_driver).abs();
             if distance < min_distance {
                 min_distance = distance;

@@ -1,3 +1,4 @@
+use std::cmp::PartialEq;
 use std::hash::Hash;
 use std::io;
 use actix::{Actor, Context, StreamHandler, ActorFutureExt, Handler, Addr, AsyncContext};
@@ -20,6 +21,17 @@ pub enum Sates {
     Traveling,
 }
 
+impl PartialEq for Sates {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Sates::Idle, Sates::Idle) => true,
+            (Sates::WaitingDriver, Sates::WaitingDriver) => true,
+            (Sates::Traveling, Sates::Traveling) => true,
+            _ => false,
+        }
+    }
+}
+
 pub struct Passenger {
     /// The port of the passenger
     id: u16,
@@ -29,6 +41,8 @@ pub struct Passenger {
     tcp_sender: Addr<TcpSender>,
     /// State of the passenger
     state: Sates,
+    /// Next Drive Request to be processed
+    rides: Vec<RideRequest>,
 }
 
 impl Actor for Passenger {
@@ -64,11 +78,16 @@ impl Handler<RideRequest> for Passenger {
     type Result = ();
 
     fn handle(&mut self, msg: RideRequest, _ctx: &mut Self::Context) -> Self::Result {
-        println!("Passenger with id {} requested a ride", self.id);
-        self.state = Sates::WaitingDriver;
-        match self.tcp_sender.try_send(msg) {
-            Ok(_) => (),
-            Err(_) => println!("Error al enviar mensaje al TcpSender"),
+        if self.state == Sates::Idle {
+            println!("Passenger with id {} requested a ride", self.id);
+            self.state = Sates::WaitingDriver;
+            match self.tcp_sender.try_send(msg) {
+                Ok(_) => (),
+                Err(_) => println!("Error al enviar mensaje al TcpSender"),
+            }
+        } else {
+            // se pushea para ejecutarlo cuando se hace el dropoff del viaje actual
+            self.rides.push(msg);
         }
     }
 }
@@ -145,6 +164,7 @@ impl Passenger {
             leader_port: LEADER_PORT,
             tcp_sender,
             state: Sates::Idle,
+            rides: Vec::new(),
         }
     }
 }

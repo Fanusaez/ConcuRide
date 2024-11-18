@@ -131,7 +131,12 @@ impl Handler<DeclineRide> for Driver {
     /// TODO: OFFER THE RIDE TO ANOTHER DRIVER
     fn handle(&mut self, msg: DeclineRide, _ctx: &mut Self::Context) -> Self::Result {
         println!("Lider {} received the declined message for the ride request from driver {}", self.id, msg.driver_id);
-        // TODO: volver a elegir a quien ofrecer el viaje
+        match self.handle_declined_ride_as_leader(msg) {
+            Ok(_) => {}
+            Err(e) => {
+                eprintln!("Error handling declined ride as leader: {:?}", e);
+            }
+        }
     }
 }
 
