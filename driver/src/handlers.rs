@@ -176,6 +176,11 @@ impl Handler<StreamMessage> for Driver {
     type Result = ();
 
     fn handle(&mut self, msg: StreamMessage, _ctx: &mut Self::Context) -> Self::Result {
-        self.add_stream(LinesStream::new(BufReader::new(msg.stream).lines()))
+        if let Some(read_half) = msg.stream {
+            Driver::add_stream(LinesStream::new(BufReader::new(read_half).lines()), _ctx);
+        } else {
+            eprintln!("No se proporcionó un stream válido");
+        }
+
     }
 }

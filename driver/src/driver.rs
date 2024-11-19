@@ -40,6 +40,8 @@ pub struct Driver {
     pub is_leader: Arc<RwLock<bool>>,
     /// Leader port
     pub leader_port: Arc<RwLock<u16>>,
+    /// write half, borrarlo despues
+    pub write_half: Arc<RwLock<Option<WriteHalf<TcpStream>>>>,
     /// The connections to the drivers
     pub active_drivers: Arc<RwLock<HashMap<u16, (Option<ReadHalf<TcpStream>>, Option<WriteHalf<TcpStream>>)>>>,
     /// States of the driver
@@ -51,7 +53,7 @@ pub struct Driver {
     /// Ride manager, contains the pending rides, unpaid rides and the rides and offers
     pub ride_manager: RideManager,
     /// ID's and WriteHalf of passengers
-    pub passengers_write_half: Arc<RwLock<HashMap<u16, WriteHalf<TcpStream>>>,
+    pub passengers_write_half: Arc<RwLock<HashMap<u16, Option<WriteHalf<TcpStream>>>>>,
 }
 
 impl Driver {
@@ -70,7 +72,7 @@ impl Driver {
         let mut drivers_last_position: HashMap<u16, (i32, i32)> = HashMap::new();
         let pending_rides: Arc<RwLock<HashMap<u16, RideRequest>>> = Arc::new(RwLock::new(HashMap::new()));
         let ride_and_offers: Arc::<RwLock<HashMap<u16, Vec<u16>>>> = Arc::new(RwLock::new(HashMap::new()));
-        let mut passengers_write_half: HashMap<u16, WriteHalf<TcpStream>> = HashMap::new();
+        let mut passengers_write_half: HashMap<u16, Option<WriteHalf<TcpStream>>> = HashMap::new();
 
         // Payment app and connection
         let mut payment_write_half: Option<WriteHalf<TcpStream>> = None;
@@ -121,6 +123,7 @@ impl Driver {
                 is_leader: is_leader.clone(),
                 leader_port: leader_port.clone(),
                 active_drivers: active_drivers_arc.clone(),
+                write_half: Arc::new(RwLock::new(None)),
                 passengers_write_half: passengers_write_half_arc.clone(),
                 state: Sates::Idle,
                 drivers_last_position: drivers_last_position_arc.clone(),
@@ -145,10 +148,10 @@ impl Driver {
                 /// guardo el id y el write half en un hashmap
 
                 let mut passengers_write_half = passengers_write_half_arc.write().unwrap();
-                passengers_write_half.insert(id, write);
+                passengers_write_half.insert(id, Some(write));
 
                 /// agrego el stream
-                driver.try_send(StreamMessage {id_passenger, stream: Some(read)}).unwrap();
+                driver.try_send(StreamMessage {id_passenger: id, stream: Some(read)}).unwrap();
 
             }
             else {

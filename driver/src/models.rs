@@ -54,7 +54,7 @@ pub struct PaymentAccepted {
     pub id: u16,
 }
 
-#[derive(Serialize, Deserialize, Message, Debug)]
+#[derive(Message, Debug)]
 #[rtype(result = "()")]
 pub struct StreamMessage {
     pub id_passenger: u16,
@@ -73,5 +73,4 @@ pub enum MessageType {
     SendPayment(SendPayment),
     PaymentAccepted(PaymentAccepted),
     PaymentRejected(PaymentRejected),
-    StreamMessage(StreamMessage),
 }
