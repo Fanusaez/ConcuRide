@@ -319,19 +319,40 @@ impl Driver {
         Ok(())
     }
 
+    fn calculate_travel_duration(&self, ride_request: &RideRequest) -> u64 {
+        let distance = ((ride_request.x_dest as i32 - ride_request.x_origin as i32).abs()) +
+            ((ride_request.y_dest as i32 - ride_request.y_origin as i32).abs());
+        distance as u64
+    }
+
     /// Drive to the destination and finish the ride
     /// # Arguments
     /// * `msg` - The message containing the ride request
     /// * `addr` - The address of the driver
-    fn drive_and_finish(&self, ride_request_msg: RideRequest, addr: Addr<Self>) -> Result<(), io::Error> {
-
+    fn drive_and_finish(&mut self, ride_request_msg: RideRequest, addr: Addr<Self>) -> Result<(), io::Error> {
         let msg_clone = ride_request_msg.clone();
         let driver_id = self.id.clone();
+        let duration = self.calculate_travel_duration(&msg_clone);
 
         thread::spawn(move || {
-            let distance = (msg_clone.x_dest as i32 - msg_clone.x_origin as i32).abs()
-                + (msg_clone.y_dest as i32 - msg_clone.y_origin as i32).abs();
-            thread::sleep(Duration::from_secs(distance as u64));
+            let mut current_position = (msg_clone.x_origin, msg_clone.y_origin);
+            let advancement = 10;  // division del camino en avances iguales
+            let x_km = (msg_clone.x_dest as i32 - msg_clone.x_origin as i32) as f64 / advancement as f64;
+            let y_km = (msg_clone.y_dest as i32 - msg_clone.y_origin as i32) as f64 / advancement as f64;
+
+            let travel_thread = thread::spawn(move || {
+                for i in 0..advancement {
+                    current_position.0 = (msg_clone.x_origin as f64 + x_km * i as f64) as u16;
+                    current_position.1 = (msg_clone.y_origin as f64 + y_km * i as f64) as u16;
+                    /// TODO actualizar posicion en tiempo real
+                    println!("Conductor {}: Actualizando posición a {:?}", driver_id, current_position);
+
+                    // simula espera
+                    thread::sleep(Duration::from_secs((duration / advancement as u64) as u64));
+                }
+            });
+
+            travel_thread.join().unwrap();
 
             let finish_ride = FinishRide {
                 passenger_id: ride_request_msg.id,
@@ -340,6 +361,8 @@ impl Driver {
 
             addr.do_send(finish_ride);
         });
+
+        self.position = (msg_clone.x_dest.into(), msg_clone.y_dest.into());
 
         Ok(())
     }
@@ -350,6 +373,7 @@ impl Driver {
     pub fn finish_ride(&mut self, msg: FinishRide) -> Result<(), io::Error> {
         self.state = Sates::Idle;
         self.send_message(MessageType::FinishRide(msg))?;
+        println!("Driver is now im position: {:?}", self.position);
         Ok(())
     }
 

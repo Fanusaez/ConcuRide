@@ -32,6 +32,15 @@ pub struct PaymentRejected {
     pub id: u16,
 }
 
+// se usaria para que el pasajero sepa la posicion, despues ver si se usa o no
+#[derive(Serialize, Deserialize, Debug, Clone, Message)]
+#[rtype(result = "()")]
+pub struct PositionUpdate {
+    pub driver_id: u16,
+    pub passenger_id: u16,
+    pub current_position: (u32, u32),
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(tag = "message_type")]
 /// enum Message used to deserialize
@@ -40,4 +49,5 @@ pub enum MessageType {
     FinishRide(FinishRide),
     DeclineRide(DeclineRide),
     PaymentRejected(PaymentRejected),
+    PositionUpdate(PositionUpdate),
 }
