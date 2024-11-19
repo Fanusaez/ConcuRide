@@ -57,7 +57,6 @@ pub struct PaymentAccepted {
 #[derive(Message, Debug)]
 #[rtype(result = "()")]
 pub struct StreamMessage {
-    pub id_passenger: u16,
     pub stream: Option<ReadHalf<TcpStream>>,
 }
 

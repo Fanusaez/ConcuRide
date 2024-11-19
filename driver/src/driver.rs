@@ -40,8 +40,8 @@ pub struct Driver {
     pub is_leader: Arc<RwLock<bool>>,
     /// Leader port
     pub leader_port: Arc<RwLock<u16>>,
-    /// write half, borrarlo despues
-    pub write_half: Arc<RwLock<Option<WriteHalf<TcpStream>>>>,
+    /// write half
+    pub write_half_to_leader: Arc<RwLock<Option<WriteHalf<TcpStream>>>>,
     /// The connections to the drivers
     pub active_drivers: Arc<RwLock<HashMap<u16, (Option<ReadHalf<TcpStream>>, Option<WriteHalf<TcpStream>>)>>>,
     /// States of the driver
@@ -95,6 +95,7 @@ impl Driver {
         let mut payment_write_half_arc = Arc::new(RwLock::new(payment_write_half));
         let mut payment_read_half_arc = Arc::new(RwLock::new(payment_read_half));
         let mut passengers_write_half_arc = Arc::new(RwLock::new(passengers_write_half));
+        let mut half_write_to_leader = Arc::new(RwLock::new(None));
 
         let driver = Driver::create(|ctx| {
             /// asocio todos los reads de los drivers al lider
@@ -123,7 +124,7 @@ impl Driver {
                 is_leader: is_leader.clone(),
                 leader_port: leader_port.clone(),
                 active_drivers: active_drivers_arc.clone(),
-                write_half: Arc::new(RwLock::new(None)),
+                write_half_to_leader: half_write_to_leader.clone(),
                 passengers_write_half: passengers_write_half_arc.clone(),
                 state: Sates::Idle,
                 drivers_last_position: drivers_last_position_arc.clone(),
@@ -151,14 +152,26 @@ impl Driver {
                 passengers_write_half.insert(id, Some(write));
 
                 /// agrego el stream
-                driver.try_send(StreamMessage {id_passenger: id, stream: Some(read)}).unwrap();
+                driver.try_send(StreamMessage {stream: Some(read)}).unwrap();
+
+                /// agrego el stream de los drivers
+                let mut active_drivers = active_drivers_arc.write().unwrap();
+                for (id, (read, _)) in active_drivers.iter_mut() {
+                    if let Some(read) = read.take() {
+                        // TODO: EN EL CASO DE EL AGREGADO DE DRIVERS NO ES NECESARIO EL ID
+                        driver.try_send(StreamMessage {stream: Some(read)}).unwrap();
+                    } else {
+                        eprintln!("Driver {} no tiene un stream de escritura disponible", id);
+                    }
+                }
 
             }
             else {
                 /// sabes que son liders
                 let (read, write) = split(stream);
-                let mut active_drivers = active_drivers_arc.write().unwrap();
-                active_drivers.insert(port, (Some(read), Some(write)));
+                driver.try_send(StreamMessage {stream: Some(read)}).unwrap();
+                /// guardo el write al lider
+                half_write_to_leader.write().unwrap().replace(write);
             }
         }
         println!("CONNECTION ACCEPTED\n");
