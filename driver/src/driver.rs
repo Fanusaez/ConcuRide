@@ -44,14 +44,14 @@ pub struct Driver {
     pub active_drivers: Arc<RwLock<HashMap<u16, (Option<ReadHalf<TcpStream>>, Option<WriteHalf<TcpStream>>)>>>,
     /// States of the driver
     pub state: Sates,
-    /// Connection to the leader or the Passenger
-    pub write_half: Arc<RwLock<Option<WriteHalf<TcpStream>>>>,
     /// Last known position of the driver (port, (x, y))
     pub drivers_last_position: Arc<RwLock<HashMap<u16, (i32, i32)>>>,
     /// Connection to the payment app
     pub payment_write_half: Arc<RwLock<Option<WriteHalf<TcpStream>>>>,
     /// Ride manager, contains the pending rides, unpaid rides and the rides and offers
     pub ride_manager: RideManager,
+    /// ID's and WriteHalf of passengers
+    pub passengers_write_half: Arc<RwLock<HashMap<u16, WriteHalf<TcpStream>>>,
 }
 
 impl Driver {
@@ -64,14 +64,13 @@ impl Driver {
         let should_be_leader = port == drivers_ports[LIDER_PORT_IDX];
         let is_leader = Arc::new(RwLock::new(should_be_leader));
         let leader_port = Arc::new(RwLock::new(drivers_ports[LIDER_PORT_IDX].clone()));
-        let mut write_half: Arc<RwLock<Option<WriteHalf<TcpStream>>>> = Arc::new(RwLock::new(None));
 
         // Auxiliar structures
         let mut active_drivers: HashMap<u16, (Option<ReadHalf<TcpStream>>, Option<WriteHalf<TcpStream>>)> = HashMap::new();
         let mut drivers_last_position: HashMap<u16, (i32, i32)> = HashMap::new();
         let pending_rides: Arc<RwLock<HashMap<u16, RideRequest>>> = Arc::new(RwLock::new(HashMap::new()));
         let ride_and_offers: Arc::<RwLock<HashMap<u16, Vec<u16>>>> = Arc::new(RwLock::new(HashMap::new()));
-        let mut streams_added = false;
+        let mut passengers_write_half: HashMap<u16, WriteHalf<TcpStream>> = HashMap::new();
 
         // Payment app and connection
         let mut payment_write_half: Option<WriteHalf<TcpStream>> = None;
@@ -93,61 +92,73 @@ impl Driver {
         let mut drivers_last_position_arc = Arc::new(RwLock::new(drivers_last_position));
         let mut payment_write_half_arc = Arc::new(RwLock::new(payment_write_half));
         let mut payment_read_half_arc = Arc::new(RwLock::new(payment_read_half));
+        let mut passengers_write_half_arc = Arc::new(RwLock::new(passengers_write_half));
+
+        let driver = Driver::create(|ctx| {
+            /// asocio todos los reads de los drivers al lider
+            if should_be_leader {
+                let mut active_drivers = active_drivers_arc.write().unwrap();
+
+                for (id, (read, _)) in active_drivers.iter_mut() {
+                    if let Some(read_half) = read.take() {
+                        Driver::add_stream(LinesStream::new(BufReader::new(read_half).lines()), ctx);
+                    } else {
+                        eprintln!("Driver {} no tiene un stream de lectura disponible", id);
+                    }
+                }
+
+                /// asocio el read del servicio de pagos al lider
+                let mut payment_read_half = payment_read_half_arc.write().unwrap();
+                if let Some(payment_read_half) = payment_read_half.take() {
+                    Driver::add_stream(LinesStream::new(BufReader::new(payment_read_half).lines()), ctx);
+                } else {
+                    eprintln!("No hay un stream de lectura disponible para el servicio de pagos");
+                }
+            }
+            Driver {
+                id: port,
+                position, // Arrancan en el origen por comodidad, ver despues que onda
+                is_leader: is_leader.clone(),
+                leader_port: leader_port.clone(),
+                active_drivers: active_drivers_arc.clone(),
+                passengers_write_half: passengers_write_half_arc.clone(),
+                state: Sates::Idle,
+                drivers_last_position: drivers_last_position_arc.clone(),
+                payment_write_half: payment_write_half_arc.clone(),
+                ride_manager: RideManager {
+                    pending_rides: pending_rides.clone(),
+                    unpaid_rides: unpaid_rides.clone(),
+                    ride_and_offers: ride_and_offers.clone(),
+                },
+
+            }
+        });
 
         let listener = TcpListener::bind(format!("127.0.0.1:{}", port)).await?;
         println!("WAITING FOR PASSENGERS TO CONNECT(leader) OR ACCEPTING LEADER(drivers)\n");
 
-        while let Ok((stream,  _)) = listener.accept().await {
+        while let Ok((stream,  addr)) = listener.accept().await {
+            if should_be_leader {
+                /// sabes que son pasajeros
+                let (read, write) = split(stream);
+                let id = addr.port();
+                /// guardo el id y el write half en un hashmap
 
-            println!("CONNECTION ACCEPTED\n");
+                let mut passengers_write_half = passengers_write_half_arc.write().unwrap();
+                passengers_write_half.insert(id, write);
 
-            Driver::create(|ctx| {
-                let (read_half, _write_half) = split(stream);
-                Driver::add_stream(LinesStream::new(BufReader::new(read_half).lines()), ctx);
+                /// agrego el stream
+                driver.try_send(StreamMessage {id_passenger, stream: Some(read)}).unwrap();
 
-                /// Write half sera conexion hacia el Passenger si es Leader, de lo contrario sera hacia el Leader (dado que soy un driver)
-                write_half.write().unwrap().replace(_write_half);
-
-                /// asocio todos los reads de los drivers al lider
-                if should_be_leader && !streams_added {
-                    let mut active_drivers = active_drivers_arc.write().unwrap();
-
-                    for (id, (read, _)) in active_drivers.iter_mut() {
-                        if let Some(read_half) = read.take() {
-                            Driver::add_stream(LinesStream::new(BufReader::new(read_half).lines()), ctx);
-                        } else {
-                            eprintln!("Driver {} no tiene un stream de lectura disponible", id);
-                        }
-                    }
-
-                    /// asocio el read del servicio de pagos al lider
-                    let mut payment_read_half = payment_read_half_arc.write().unwrap();
-                    if let Some(payment_read_half) = payment_read_half.take() {
-                        Driver::add_stream(LinesStream::new(BufReader::new(payment_read_half).lines()), ctx);
-                    } else {
-                        eprintln!("No hay un stream de lectura disponible para el servicio de pagos");
-                    }
-                    streams_added = true;
-                }
-                Driver {
-                    id: port,
-                    position, // Arrancan en el origen por comodidad, ver despues que onda
-                    is_leader: is_leader.clone(),
-                    leader_port: leader_port.clone(),
-                    active_drivers: active_drivers_arc.clone(),
-                    state: Sates::Idle,
-                    write_half: write_half.clone(),
-                    drivers_last_position: drivers_last_position_arc.clone(),
-                    payment_write_half: payment_write_half_arc.clone(),
-                    ride_manager: RideManager {
-                        pending_rides: pending_rides.clone(),
-                        unpaid_rides: unpaid_rides.clone(),
-                        ride_and_offers: ride_and_offers.clone(),
-                    },
-
-                }
-            });
+            }
+            else {
+                /// sabes que son liders
+                let (read, write) = split(stream);
+                let mut active_drivers = active_drivers_arc.write().unwrap();
+                active_drivers.insert(port, (Some(read), Some(write)));
+            }
         }
+        println!("CONNECTION ACCEPTED\n");
         Ok(())
     }
 

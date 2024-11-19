@@ -1,5 +1,8 @@
 use std::io;
+use tokio::io::{split, AsyncBufReadExt, BufReader, AsyncWriteExt, WriteHalf, AsyncReadExt, ReadHalf};
 use actix::{Actor, AsyncContext, Context, Handler, StreamHandler};
+use tokio_stream::wrappers::LinesStream;
+
 use crate::driver::Driver;
 use crate::models::*;
 use crate::driver::*;
@@ -166,5 +169,13 @@ impl Handler<FinishRide> for Driver {
             // driver send FinishRide to the leader and change state to Idle
             self.finish_ride(msg).unwrap()
         }
+    }
+}
+
+impl Handler<StreamMessage> for Driver {
+    type Result = ();
+
+    fn handle(&mut self, msg: StreamMessage, _ctx: &mut Self::Context) -> Self::Result {
+        self.add_stream(LinesStream::new(BufReader::new(msg.stream).lines()))
     }
 }
