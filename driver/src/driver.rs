@@ -98,6 +98,7 @@ impl Driver {
         let mut passengers_write_half_arc = Arc::new(RwLock::new(passengers_write_half));
         let mut half_write_to_leader = Arc::new(RwLock::new(None));
 
+        // para que funcione, no se porque
         let associate_driver_streams = Self::associate_drivers_stream;
         let associate_payment_stream = Self::associate_payment_stream;
         let handle_passenger_connection = Self::handle_passenger_connection;
@@ -261,7 +262,6 @@ impl Driver {
     }
 
     /// Handles the ride request from passenger, sends RideRequest to the closest driver
-    /// TODO: LOGICA PARA VER A QUIEN SE LE DAN LOS VIAJES, ACA SE ESTA MANDANDO A TODOS
     /// # Arguments
     /// * `msg` - The message containing the ride request
     pub fn handle_ride_request_as_leader(&mut self, msg: RideRequest) -> Result<(), io::Error> {
@@ -270,6 +270,7 @@ impl Driver {
         self.ride_manager.insert_ride_in_pending(msg)?;
 
         /// Logica de a quien se le manda el mensaje
+        /// TODO: Ojo que puede devlver cero, hay que ver que hacer ahi
         let driver_id_to_send = self.get_closest_driver(msg);
 
         /// Envio el mensaje al driver
@@ -281,6 +282,10 @@ impl Driver {
         Ok(())
     }
 
+    /// Sends the ride request to the driver specified by the id, only used by the leader
+    /// # Arguments
+    /// * `driver_id` - The id of the driver
+    /// * `msg` - The message containing the ride request
     pub fn send_ride_request_to_driver(&mut self, driver_id: u16, msg: RideRequest) -> Result<(), io::Error> {
         let mut active_drivers_clone = Arc::clone(&self.active_drivers);
         let msg_clone = msg.clone();
@@ -387,7 +392,10 @@ impl Driver {
         Ok(())
     }
 
-    /// Generic function to send a message to the passenger specified by the id
+    /// Generic function to send a message to the passenger specified by the id, only used by the leader
+    /// # Arguments
+    /// * `message` - The message to send
+    /// * `passenger_id` - The id of the passenger
     pub fn send_message_to_passenger(
         &self,
         message: MessageType,
@@ -428,8 +436,9 @@ impl Driver {
         Ok(())
     }
 
-    /// Sends a message to the leader
+    /// Sends a message to the leader, only used by the drivers
     /// # Arguments
+    /// * `message` - The message to send
     pub fn send_message_to_leader(&self, message: MessageType) -> Result<(), io::Error> {
         let write_half = Arc::clone(&self.write_half_to_leader);
         let serialized = serde_json::to_string(&message)?;
