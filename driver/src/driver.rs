@@ -57,6 +57,7 @@ pub struct Driver {
 }
 
 impl Driver {
+
     /// Creates the actor and starts listening for incoming passengers
     /// # Arguments
     /// * `port` - The port of the driver
@@ -97,26 +98,20 @@ impl Driver {
         let mut passengers_write_half_arc = Arc::new(RwLock::new(passengers_write_half));
         let mut half_write_to_leader = Arc::new(RwLock::new(None));
 
+        let associate_driver_streams = Self::associate_drivers_stream;
+        let associate_payment_stream = Self::associate_payment_stream;
+        let handle_passenger_connection = Self::handle_passenger_connection;
+        let handle_leader_connection = Self::handle_leader_connection;
+
+
         let driver = Driver::create(|ctx| {
             /// asocio todos los reads de los drivers al lider
             if should_be_leader {
-                let mut active_drivers = active_drivers_arc.write().unwrap();
+                // Asociar streams de los conductores
+                associate_driver_streams(ctx, active_drivers_arc.clone());
 
-                for (id, (read, _)) in active_drivers.iter_mut() {
-                    if let Some(read_half) = read.take() {
-                        Driver::add_stream(LinesStream::new(BufReader::new(read_half).lines()), ctx);
-                    } else {
-                        eprintln!("Driver {} no tiene un stream de lectura disponible", id);
-                    }
-                }
-
-                /// asocio el read del servicio de pagos al lider
-                let mut payment_read_half = payment_read_half_arc.write().unwrap();
-                if let Some(payment_read_half) = payment_read_half.take() {
-                    Driver::add_stream(LinesStream::new(BufReader::new(payment_read_half).lines()), ctx);
-                } else {
-                    eprintln!("No hay un stream de lectura disponible para el servicio de pagos");
-                }
+                // Asociar el stream del servicio de pagos
+                associate_payment_stream(ctx, payment_read_half_arc.clone());
             }
             Driver {
                 id: port,
@@ -139,44 +134,112 @@ impl Driver {
         });
 
         let listener = TcpListener::bind(format!("127.0.0.1:{}", port)).await?;
-        println!("WAITING FOR PASSENGERS TO CONNECT(leader) OR ACCEPTING LEADER(drivers)\n");
+        println!("WAITING FOR PASSENGERS TO CONNECT (leader) OR ACCEPTING LEADER (drivers)\n");
 
-        while let Ok((stream,  addr)) = listener.accept().await {
+        while let Ok((stream, addr)) = listener.accept().await {
             if should_be_leader {
-                /// sabes que son pasajeros
-                let (read, write) = split(stream);
-                let id = addr.port();
-                /// guardo el id y el write half en un hashmap
-
-                let mut passengers_write_half = passengers_write_half_arc.write().unwrap();
-                passengers_write_half.insert(id, Some(write));
-
-                /// agrego el stream
-                driver.try_send(StreamMessage {stream: Some(read)}).unwrap();
-
-                /// agrego el stream de los drivers
-                let mut active_drivers = active_drivers_arc.write().unwrap();
-                for (id, (read, _)) in active_drivers.iter_mut() {
-                    if let Some(read) = read.take() {
-                        // TODO: EN EL CASO DE EL AGREGADO DE DRIVERS NO ES NECESARIO EL ID
-                        driver.try_send(StreamMessage {stream: Some(read)}).unwrap();
-                    } else {
-                        eprintln!("Driver {} no tiene un stream de escritura disponible", id);
-                    }
-                }
-
-            }
-            else {
-                /// sabes que son liders
-                let (read, write) = split(stream);
-                driver.try_send(StreamMessage {stream: Some(read)}).unwrap();
-                /// guardo el write al lider
-                half_write_to_leader.write().unwrap().replace(write);
+                handle_passenger_connection(stream, addr.port(), &passengers_write_half_arc, &driver)?;
+            } else {
+                handle_leader_connection(stream, &half_write_to_leader, &driver)?;
             }
         }
-        println!("CONNECTION ACCEPTED\n");
         Ok(())
     }
+
+    /// Associates the drivers streams to the driver actor, only used by the leader
+    /// # Arguments
+    /// * `ctx` - The context of the driver
+    /// * `active_drivers_arc` - The arc of the active drivers
+    pub fn associate_drivers_stream(
+        ctx: &mut actix::Context<Driver>,
+        active_drivers_arc: Arc<RwLock<HashMap<u16, (Option<ReadHalf<TcpStream>>, Option<WriteHalf<TcpStream>>)>>>)
+        -> Result<(), io::Error>
+    {
+        let mut active_drivers = active_drivers_arc.write().unwrap();
+
+        for (id, (read, _)) in active_drivers.iter_mut() {
+            if let Some(read_half) = read.take() {
+                Driver::add_stream(LinesStream::new(BufReader::new(read_half).lines()), ctx);
+            } else {
+                eprintln!("No hay un stream de lectura disponible para el conductor con id {}", id);
+            }
+        }
+        Ok(())
+    }
+
+    /// Associates the payment stream to the driver actor, only used by the leader
+    /// # Arguments
+    /// * `ctx` - The context of the driver
+    /// * `payment_read_half_arc` - The arc of the payment read half
+    pub fn associate_payment_stream(
+        ctx: &mut actix::Context<Driver>,
+        payment_read_half_arc: Arc<RwLock<Option<ReadHalf<TcpStream>>>>)
+        -> Result<(), io::Error> {
+        let mut payment_read_half = payment_read_half_arc.write().unwrap();
+
+        if let Some(payment_read_half) = payment_read_half.take() {
+            Driver::add_stream(LinesStream::new(BufReader::new(payment_read_half).lines()), ctx);
+        } else {
+            eprintln!("No hay un stream de lectura disponible para el servicio de pagos");
+        }
+        Ok(())
+    }
+
+    /// Manages the connection of a passenger, only used by the leader
+    /// # Arguments
+    /// * `stream` - The stream of the passenger
+    /// * `id` - The id of the passenger
+    /// * `passengers_write_half_arc` - The arc of the write halves of the passengers
+    /// * `driver` - The address of the driver
+    fn handle_passenger_connection(
+        stream: TcpStream,
+        id: u16,
+        passengers_write_half_arc: &Arc<RwLock<HashMap<u16, Option<WriteHalf<TcpStream>>>>>,
+        driver: &Addr<Driver>,
+    ) -> Result<(), io::Error> {
+        let (read, write) = split(stream);
+
+        // Guardar el WriteHalf del pasajero
+        let mut passengers_write_half = passengers_write_half_arc.write().unwrap();
+        passengers_write_half.insert(id, Some(write));
+
+        // Agregar el stream de lectura al actor
+        match driver.try_send(StreamMessage { stream: Some(read) }) {
+            Ok(_) => {}
+            Err(e) => {
+                eprintln!("Error al enviar el stream al actor: {:?}", e);
+            }
+        }
+        Ok(())
+    }
+
+    /// Manages the connection of a leader, only used by the drivers
+    /// # Arguments
+    /// * `stream` - The stream of the leader
+    /// * `half_write_to_leader` - The arc of the write half to the leader
+    /// * `driver` - The address of the driver
+    fn handle_leader_connection(
+        stream: TcpStream,
+        half_write_to_leader: &Arc<RwLock<Option<WriteHalf<TcpStream>>>>,
+        driver: &Addr<Driver>,
+    ) -> Result<(), io::Error> {
+        let (read, write) = split(stream);
+
+        // Agregar el stream de lectura al actor
+        match driver.try_send(StreamMessage { stream: Some(read) }) {
+            Ok(_) => {}
+            Err(e) => {
+                eprintln!("Error al enviar el stream al actor: {:?}", e);
+            }
+        }
+
+        // Guardar el WriteHalf del líder
+        half_write_to_leader.write().unwrap().replace(write);
+        Ok(())
+    }
+
+/// -------------------------------- Fin del start/inicializacion -------------------------------- ///
+///
 
     /// Handles the ride request from the leader as a driver
     /// # Arguments

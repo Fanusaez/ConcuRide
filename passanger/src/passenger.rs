@@ -128,7 +128,7 @@ impl Passenger {
     /// * `tx` - The channel to send a completion signal to the main function
     pub async fn start(port: u16, rides: Vec<RideRequest>) -> Result<(), io::Error> {
         let socket = TcpSocket::new_v4()?;
-        socket.bind("127.0.0.1:9000".parse().unwrap())?; // Fija el puerto 12345
+        socket.bind(format!("127.0.0.1:{}", port).parse().unwrap())?; // Fija el puerto 12345
         let direction = format!("127.0.0.1:{}", crate::LEADER_PORT);
         let stream = socket.connect(direction.parse().unwrap()).await?;
         let rides_clone = rides.clone();
@@ -140,7 +140,7 @@ impl Passenger {
         }
 
         /// listen for connections
-        let listener = TcpListener::bind(format!("127.0.0.1:{}", port)).await?;
+        let listener = TcpListener::bind(format!("127.0.0.1:{}", port + 1)).await?;
 
         /// Aca entrara solo cuando se caiga el lider, y un nuevo lider queira restablecer la conexion
         while let Ok((stream,  _)) = listener.accept().await {
