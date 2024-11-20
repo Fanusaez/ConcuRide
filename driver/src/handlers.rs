@@ -1,5 +1,8 @@
 use std::io;
+use tokio::io::{split, AsyncBufReadExt, BufReader, AsyncWriteExt, WriteHalf, AsyncReadExt, ReadHalf};
 use actix::{Actor, AsyncContext, Context, Handler, StreamHandler};
+use tokio_stream::wrappers::LinesStream;
+
 use crate::driver::Driver;
 use crate::models::*;
 use crate::driver::*;
@@ -39,6 +42,11 @@ impl StreamHandler<Result<String, io::Error>> for Driver {
                 MessageType::PaymentRejected(payment_rejected) => {
                     ctx.address().do_send(payment_rejected);
                 }
+
+                MessageType::NewConnection(new_connection) => {
+                    ctx.address().do_send(new_connection);
+                }
+
                 _ => {
                     println!("Unknown Message");
                 }
@@ -94,7 +102,7 @@ impl Handler<PaymentRejected> for Driver {
 
     fn handle(&mut self, msg: PaymentRejected, ctx: &mut Self::Context) -> Self::Result {
         let msg_message_type = MessageType::PaymentRejected(msg);
-        match self.send_message(msg_message_type) {
+        match self.send_message_to_passenger(msg_message_type, msg.id) {
             Ok(_) => {}
             Err(e) => {
                 eprintln!("Error sending message to passenger: {:?}", e);
@@ -156,7 +164,7 @@ impl Handler<FinishRide> for Driver {
                 }
             }
             let msg_message_type = MessageType::FinishRide(msg);
-            match self.send_message(msg_message_type) {
+            match self.send_message_to_passenger(msg_message_type, msg.passenger_id) {
                 Ok(_) => {}
                 Err(e) => {
                     eprintln!("Error sending message to passenger: {:?}", e);
@@ -165,6 +173,35 @@ impl Handler<FinishRide> for Driver {
         } else {
             // driver send FinishRide to the leader and change state to Idle
             self.finish_ride(msg).unwrap()
+        }
+    }
+}
+
+impl Handler<StreamMessage> for Driver {
+    type Result = ();
+
+    fn handle(&mut self, msg: StreamMessage, _ctx: &mut Self::Context) -> Self::Result {
+        if let Some(read_half) = msg.stream {
+            Driver::add_stream(LinesStream::new(BufReader::new(read_half).lines()), _ctx);
+        } else {
+            eprintln!("No se proporcionó un stream válido");
+        }
+
+    }
+}
+
+impl Handler<NewConnection> for Driver {
+    type Result = ();
+
+    fn handle(&mut self, msg: NewConnection, _ctx: &mut Self::Context) -> Self::Result {
+        let mut passengers_write_half = self.passengers_write_half.write().unwrap();
+        let new_passenger_id = msg.passenger_id;
+        let old_passenger_id = msg.used_port;
+        // Reemplazar la clave
+        if let Some(write_half_passenger) = passengers_write_half.remove(&old_passenger_id) {
+            passengers_write_half.insert(new_passenger_id, write_half_passenger);
+        } else {
+            eprintln!("No se encontró el puerto usado por el pasajero");
         }
     }
 }

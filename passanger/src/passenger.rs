@@ -6,6 +6,7 @@ use actix_async_handler::async_handler;
 use tokio::io::{split, AsyncBufReadExt, AsyncWriteExt, BufReader, WriteHalf};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_stream::wrappers::LinesStream;
+use tokio::net::TcpSocket;
 
 use crate::models::*;
 
@@ -119,16 +120,35 @@ impl Handler<PaymentRejected> for Passenger {
     fn handle(&mut self, msg: PaymentRejected, _ctx: &mut Self::Context) -> Self::Result {}
 }
 
+impl Handler<NewConnection> for Passenger {
+    type Result = ();
+
+    fn handle(&mut self, msg: NewConnection, _ctx: &mut Self::Context) -> Self::Result {
+        match self.tcp_sender.try_send(msg) {
+            Ok(_) => (),
+            Err(_) => println!("Error al enviar mensaje al TcpSender"),
+        }
+    }
+}
+
 impl Passenger {
     /// Creates the actor and connects to the leader
     /// # Arguments
     /// * `port` - The port of the passenger
     /// * `rides` - The list of rides (coordinates) that the passenger has to go to
     /// * `tx` - The channel to send a completion signal to the main function
-    pub async fn start(port: u16, rides: Vec<RideRequest>) -> Result<(), io::Error> {
+    pub async fn start(port_id: u16, rides: Vec<RideRequest>) -> Result<(), io::Error> {
         let stream = TcpStream::connect(format!("127.0.0.1:{}", crate::LEADER_PORT)).await?;
+        let used_port = stream.local_addr()?.port();
         let rides_clone = rides.clone();
-        let addr = Passenger::create_actor_instance(port, stream);
+        let addr = Passenger::create_actor_instance(port_id, stream);
+
+        let msg = NewConnection {
+            passenger_id: port_id,
+            used_port,
+        };
+
+        addr.send(msg).await.unwrap();
 
         // Send the rides to myself to be processed
         for ride in rides_clone {
@@ -136,7 +156,7 @@ impl Passenger {
         }
 
         /// listen for connections
-        let listener = TcpListener::bind(format!("127.0.0.1:{}", port)).await?;
+        let listener = TcpListener::bind(format!("127.0.0.1:{}", port_id)).await?;
 
         /// Aca entrara solo cuando se caiga el lider, y un nuevo lider queira restablecer la conexion
         while let Ok((stream,  _)) = listener.accept().await {
@@ -206,5 +226,25 @@ impl Handler<RideRequest> for TcpSender {
 
         self.write = Some(ret_write);
     }
+}
 
+#[async_handler]
+impl Handler<NewConnection> for TcpSender {
+    type Result = ();
+
+    async fn handle(&mut self, msg: NewConnection, ctx: &mut Self::Context) -> Self::Result {
+        let mut write = self.write.take()
+            .expect("No debería poder llegar otro mensaje antes de que vuelva por usar AtomicResponse");
+
+        let msg_type = MessageType::NewConnection(msg);
+        let serialized = serde_json::to_string(&msg_type).expect("should serialize");
+        let ret_write = async move {
+            write
+                .write_all(format!("{}\n", serialized).as_bytes()).await
+                .expect("should have sent");
+            write
+        }.await;
+
+        self.write = Some(ret_write);
+    }
 }

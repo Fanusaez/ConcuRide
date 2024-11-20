@@ -1,5 +1,7 @@
 use actix::Message;
 use serde::{Deserialize, Serialize};
+use tokio::io::{ReadHalf};
+use tokio::net::{TcpListener, TcpStream};
 
 /// RideRequest struct, ver como se puede importar desde otro archivo, esto esta en utils.rs\
 #[derive(Serialize, Deserialize, Message, Debug, Clone, Copy)]
@@ -52,6 +54,20 @@ pub struct PaymentAccepted {
     pub id: u16,
 }
 
+#[derive(Message, Debug)]
+#[rtype(result = "()")]
+pub struct StreamMessage {
+    pub stream: Option<ReadHalf<TcpStream>>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Message)]
+#[rtype(result = "()")]
+pub struct NewConnection {
+    pub passenger_id: u16,
+    pub used_port: u16,
+}
+
+
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(tag = "message_type")]
 /// enum Message used to deserialize
@@ -63,4 +79,5 @@ pub enum MessageType {
     SendPayment(SendPayment),
     PaymentAccepted(PaymentAccepted),
     PaymentRejected(PaymentRejected),
+    NewConnection(NewConnection),
 }

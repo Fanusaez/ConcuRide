@@ -41,6 +41,13 @@ pub struct PositionUpdate {
     pub current_position: (u32, u32),
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Message)]
+#[rtype(result = "()")]
+pub struct NewConnection {
+    pub passenger_id: u16,
+    pub used_port: u16,
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(tag = "message_type")]
 /// enum Message used to deserialize
@@ -50,4 +57,5 @@ pub enum MessageType {
     DeclineRide(DeclineRide),
     PaymentRejected(PaymentRejected),
     PositionUpdate(PositionUpdate),
+    NewConnection(NewConnection),
 }
