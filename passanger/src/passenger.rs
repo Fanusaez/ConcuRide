@@ -6,6 +6,7 @@ use actix_async_handler::async_handler;
 use tokio::io::{split, AsyncBufReadExt, AsyncWriteExt, BufReader, WriteHalf};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_stream::wrappers::LinesStream;
+use tokio::net::TcpSocket;
 
 use crate::models::*;
 
@@ -126,7 +127,10 @@ impl Passenger {
     /// * `rides` - The list of rides (coordinates) that the passenger has to go to
     /// * `tx` - The channel to send a completion signal to the main function
     pub async fn start(port: u16, rides: Vec<RideRequest>) -> Result<(), io::Error> {
-        let stream = TcpStream::connect(format!("127.0.0.1:{}", crate::LEADER_PORT)).await?;
+        let socket = TcpSocket::new_v4()?;
+        socket.bind("127.0.0.1:9000".parse().unwrap())?; // Fija el puerto 12345
+        let direction = format!("127.0.0.1:{}", crate::LEADER_PORT);
+        let stream = socket.connect(direction.parse().unwrap()).await?;
         let rides_clone = rides.clone();
         let addr = Passenger::create_actor_instance(port, stream);
 

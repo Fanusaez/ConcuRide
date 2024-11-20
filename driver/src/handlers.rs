@@ -97,7 +97,7 @@ impl Handler<PaymentRejected> for Driver {
 
     fn handle(&mut self, msg: PaymentRejected, ctx: &mut Self::Context) -> Self::Result {
         let msg_message_type = MessageType::PaymentRejected(msg);
-        match self.send_message(msg_message_type) {
+        match self.send_message_to_passenger(msg_message_type, msg.id) {
             Ok(_) => {}
             Err(e) => {
                 eprintln!("Error sending message to passenger: {:?}", e);
@@ -159,7 +159,7 @@ impl Handler<FinishRide> for Driver {
                 }
             }
             let msg_message_type = MessageType::FinishRide(msg);
-            match self.send_message(msg_message_type) {
+            match self.send_message_to_passenger(msg_message_type, msg.passenger_id) {
                 Ok(_) => {}
                 Err(e) => {
                     eprintln!("Error sending message to passenger: {:?}", e);
