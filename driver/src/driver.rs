@@ -73,7 +73,7 @@ impl Driver {
         let mut drivers_last_position: HashMap<u16, (i32, i32)> = HashMap::new();
         let pending_rides: Arc<RwLock<HashMap<u16, RideRequest>>> = Arc::new(RwLock::new(HashMap::new()));
         let ride_and_offers: Arc::<RwLock<HashMap<u16, Vec<u16>>>> = Arc::new(RwLock::new(HashMap::new()));
-        let mut passengers_write_half: HashMap<u16, Option<WriteHalf<TcpStream>>> = HashMap::new();
+        let passengers_write_half: HashMap<u16, Option<WriteHalf<TcpStream>>> = HashMap::new();
 
         // Payment app and connection
         let mut payment_write_half: Option<WriteHalf<TcpStream>> = None;
@@ -240,7 +240,7 @@ impl Driver {
     }
 
 /// -------------------------------- Fin del start/inicializacion -------------------------------- ///
-///
+
 
     /// Handles the ride request from the leader as a driver
     /// # Arguments

@@ -60,6 +60,13 @@ pub struct StreamMessage {
     pub stream: Option<ReadHalf<TcpStream>>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Message)]
+#[rtype(result = "()")]
+pub struct NewConnection {
+    pub passenger_id: u16,
+    pub used_port: u16,
+}
+
 
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(tag = "message_type")]
@@ -72,4 +79,5 @@ pub enum MessageType {
     SendPayment(SendPayment),
     PaymentAccepted(PaymentAccepted),
     PaymentRejected(PaymentRejected),
+    NewConnection(NewConnection),
 }

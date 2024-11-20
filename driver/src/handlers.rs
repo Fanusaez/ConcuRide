@@ -42,6 +42,11 @@ impl StreamHandler<Result<String, io::Error>> for Driver {
                 MessageType::PaymentRejected(payment_rejected) => {
                     ctx.address().do_send(payment_rejected);
                 }
+
+                MessageType::NewConnection(new_connection) => {
+                    ctx.address().do_send(new_connection);
+                }
+
                 _ => {
                     println!("Unknown Message");
                 }
@@ -182,5 +187,21 @@ impl Handler<StreamMessage> for Driver {
             eprintln!("No se proporcionó un stream válido");
         }
 
+    }
+}
+
+impl Handler<NewConnection> for Driver {
+    type Result = ();
+
+    fn handle(&mut self, msg: NewConnection, _ctx: &mut Self::Context) -> Self::Result {
+        let mut passengers_write_half = self.passengers_write_half.write().unwrap();
+        let new_passenger_id = msg.passenger_id;
+        let old_passenger_id = msg.used_port;
+        // Reemplazar la clave
+        if let Some(write_half_passenger) = passengers_write_half.remove(&old_passenger_id) {
+            passengers_write_half.insert(new_passenger_id, write_half_passenger);
+        } else {
+            eprintln!("No se encontró el puerto usado por el pasajero");
+        }
     }
 }
