@@ -194,7 +194,7 @@ impl Driver {
     /// * `driver` - The address of the driver
     fn handle_passenger_connection(
         stream: TcpStream,
-        id: u16,
+        port_used: u16,
         passengers_write_half_arc: &Arc<RwLock<HashMap<u16, Option<WriteHalf<TcpStream>>>>>,
         driver: &Addr<Driver>,
     ) -> Result<(), io::Error> {
@@ -202,14 +202,17 @@ impl Driver {
 
         // Guardar el WriteHalf del pasajero
         let mut passengers_write_half = passengers_write_half_arc.write().unwrap();
-        passengers_write_half.insert(id, Some(write));
+
+        passengers_write_half.insert(port_used, Some(write));
 
         // Agregar el stream de lectura al actor
-        match driver.try_send(StreamMessage { stream: Some(read) }) {
-            Ok(_) => {}
-            Err(e) => {
-                eprintln!("Error al enviar el stream al actor: {:?}", e);
+        if driver.connected() {
+            match driver.try_send(StreamMessage { stream: Some(read) }) {
+                Ok(_) => {}
+                Err(e) => eprintln!("Error al enviar el stream al actorrrrr: {:?}", e),
             }
+        } else {
+            eprintln!("El actor Driver ya no está activo.");
         }
         Ok(())
     }
@@ -542,6 +545,21 @@ impl Driver {
             }
         });
 
+        Ok(())
+    }
+
+    pub fn verify_pending_ride_request(&self, passenger_id: u16) -> Result<(), io::Error> {
+        // Si ya hay un ride request en pending, osea ya se efectuo el pago y esta en viaje
+        // si el pago no se efectuo todavia por x razon, solo se envia el mensaje de pago aceptado y el pasajero se aviva
+        match self.ride_manager.verify_pending_ride_request(passenger_id) {
+            Ok(true) => {
+                // TODO: eventualmente podriamos poner en state en que se encuentra el viaje (asignado, en curso, sin asignar pero pagado, etc)
+                let message = RideRequestReconnection {passenger_id, state: "WaitingDriver".to_string()};
+                self.send_message_to_passenger(MessageType::RideRequestReconnection(message), passenger_id)?;
+            }
+            Ok(false) => { return Ok(()); }
+            Err(e) => {  return Err(e);  }
+        }
         Ok(())
     }
 

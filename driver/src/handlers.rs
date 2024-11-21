@@ -9,6 +9,15 @@ use crate::driver::*;
 
 impl Actor for Driver {
     type Context = Context<Self>;
+
+    fn stopping(&mut self, _: &mut Self::Context) -> actix::Running {
+        // Evita que el actor muera mientras tenga streams activos
+        if !self.active_drivers.read().unwrap().is_empty() {
+            actix::Running::Continue
+        } else {
+            actix::Running::Stop
+        }
+    }
 }
 
 impl StreamHandler<Result<String, io::Error>> for Driver {
@@ -16,46 +25,47 @@ impl StreamHandler<Result<String, io::Error>> for Driver {
     /// Matches the message type and sends it to the corresponding handler.
     fn handle(&mut self, read: Result<String, io::Error>, ctx: &mut Self::Context) {
         if let Ok(line) = read {
-            let message: MessageType = serde_json::from_str(&line).expect("Failed to deserialize message");
-            match message {
-                MessageType::RideRequest(coords)=> {
-                    ctx.address().do_send(coords);
-                }
-
-                MessageType::AcceptRide (accept_ride) => {
-                    ctx.address().do_send(accept_ride);
-                }
-
-                MessageType::DeclineRide (decline_ride) => {
-                    ctx.address().do_send(decline_ride);
-                }
-
-                MessageType::FinishRide (finish_ride) => {
-                    ctx.address().do_send(finish_ride);
-                }
-
-                MessageType::PaymentAccepted(payment_accepted) => {
-                    println!("Payment accepted msg received");
-                    ctx.address().do_send(payment_accepted);
-                }
-
-                MessageType::PaymentRejected(payment_rejected) => {
-                    ctx.address().do_send(payment_rejected);
-                }
-
-                MessageType::NewConnection(new_connection) => {
-                    ctx.address().do_send(new_connection);
-                }
-
-                _ => {
-                    println!("Unknown Message");
+            match serde_json::from_str::<MessageType>(&line) {
+                Ok(message) => match message {
+                    MessageType::RideRequest(coords) => {
+                        ctx.address().do_send(coords);
+                    }
+                    MessageType::AcceptRide(accept_ride) => {
+                        ctx.address().do_send(accept_ride);
+                    }
+                    MessageType::DeclineRide(decline_ride) => {
+                        ctx.address().do_send(decline_ride);
+                    }
+                    MessageType::FinishRide(finish_ride) => {
+                        ctx.address().do_send(finish_ride);
+                    }
+                    MessageType::PaymentAccepted(payment_accepted) => {
+                        println!("Payment accepted msg received");
+                        ctx.address().do_send(payment_accepted);
+                    }
+                    MessageType::PaymentRejected(payment_rejected) => {
+                        ctx.address().do_send(payment_rejected);
+                    }
+                    MessageType::NewConnection(new_connection) => {
+                        ctx.address().do_send(new_connection);
+                    }
+                    _ => {
+                        println!("Unknown Message");
+                    }
+                },
+                Err(e) => {
+                    eprintln!("Failed to deserialize message: {}", e);
                 }
             }
         } else {
-            println!("[{:?}] Failed to read line {:?}", self.id, read);
+            eprintln!("[{:?}] Failed to read line {:?}", self.id, read);
         }
     }
+
 }
+
+/// TODO: GENERAL DE TODOS LOS HANDLERS, DEBERIAMOS PASAR TODA LA FUNCIONALIDAD A DRIVER, SOLO LOS PRINTS DEJARLOS CAPAZ
+
 
 impl Handler<RideRequest> for Driver {
     type Result = ();
@@ -194,14 +204,37 @@ impl Handler<NewConnection> for Driver {
     type Result = ();
 
     fn handle(&mut self, msg: NewConnection, _ctx: &mut Self::Context) -> Self::Result {
+        println!("Entro a new connection");
         let mut passengers_write_half = self.passengers_write_half.write().unwrap();
         let new_passenger_id = msg.passenger_id;
         let old_passenger_id = msg.used_port;
+
+        // Ver si ya estaba la conexion con el pasajero
+        let previous_connection = passengers_write_half.contains_key(&new_passenger_id);
+
+        // en caso de reconexion, borrar la conexion anterior
+        if previous_connection {
+            match passengers_write_half.remove(&new_passenger_id) {
+                Some(_write_half) => {
+                    eprintln!("Se eliminó la conexión anterior con el pasajero {}", new_passenger_id);
+                }
+                None => {
+                    eprintln!("No se encontró la conexión anterior con el pasajero {}", new_passenger_id);
+                }
+            }
+        }
+
         // Reemplazar la clave
         if let Some(write_half_passenger) = passengers_write_half.remove(&old_passenger_id) {
             passengers_write_half.insert(new_passenger_id, write_half_passenger);
         } else {
             eprintln!("No se encontró el puerto usado por el pasajero");
         }
+
+        // si ya hubo alguna conexion, verificar que no haya un RideRequest pendiente
+        if previous_connection {
+            self.verify_pending_ride_request(new_passenger_id).unwrap();
+        }
+
     }
 }

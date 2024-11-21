@@ -48,6 +48,13 @@ pub struct NewConnection {
     pub used_port: u16,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Message)]
+#[rtype(result = "()")]
+pub struct RideRequestReconnection {
+    pub passenger_id: u16,
+    pub state: String,
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(tag = "message_type")]
 /// enum Message used to deserialize
@@ -58,4 +65,5 @@ pub enum MessageType {
     PaymentRejected(PaymentRejected),
     PositionUpdate(PositionUpdate),
     NewConnection(NewConnection),
+    RideRequestReconnection(RideRequestReconnection),
 }

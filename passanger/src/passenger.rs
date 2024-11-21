@@ -66,6 +66,10 @@ impl StreamHandler<Result<String, io::Error>> for Passenger {
                 MessageType::PaymentRejected(payment_rejected) => {
                     ctx.address().do_send(payment_rejected);
                 }
+
+                MessageType::RideRequestReconnection(ride_request_reconnection) => {
+                    ctx.address().do_send(ride_request_reconnection);
+                }
                 _ => {
                     println!("Unknown Message");
                 }
@@ -131,6 +135,28 @@ impl Handler<NewConnection> for Passenger {
     }
 }
 
+impl Handler<RideRequestReconnection> for Passenger {
+    type Result = ();
+
+    fn handle(&mut self, msg: RideRequestReconnection, _ctx: &mut Self::Context) -> Self::Result {
+        println!("Reconnected, RideRequest in progress");
+        match msg.state.as_str() {
+            "Idle" => {
+                self.state = Sates::Idle;
+            }
+            "WaitingDriver" => {
+                self.state = Sates::WaitingDriver;
+            }
+            "Traveling" => {
+                self.state = Sates::Traveling;
+            }
+            _ => {
+                println!("Unknown state");
+            }
+        }
+    }
+}
+
 impl Passenger {
     /// Creates the actor and connects to the leader
     /// # Arguments
@@ -149,6 +175,7 @@ impl Passenger {
         };
 
         addr.send(msg).await.unwrap();
+
 
         // Send the rides to myself to be processed
         for ride in rides_clone {
