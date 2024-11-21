@@ -22,7 +22,7 @@ impl Actor for Driver {
 
 impl StreamHandler<Result<String, io::Error>> for Driver {
     /// Handles the messages coming from the associated stream.
-    /// Matches the message type and sends it to the corresponding handler.
+    ///  Matches the message type and sends it to the corresponding handler.
     fn handle(&mut self, read: Result<String, io::Error>, ctx: &mut Self::Context) {
         if let Ok(line) = read {
             match serde_json::from_str::<MessageType>(&line) {
