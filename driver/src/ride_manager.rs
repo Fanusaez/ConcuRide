@@ -139,19 +139,23 @@ impl RideManager {
 
     }
 
-    /// Verifies if a passenger has a pending ride request, if it does -> True, else -> False
+    /// Verifies if a passenger has a pending ride request.
+    /// Returns `true` if a pending ride request exists for the given `passenger_id`, otherwise `false`.
+    ///
     /// # Arguments
-    /// * `passenger_id` - The id of the passenger
-    pub fn verify_pending_ride_request(&self, passenger_id: u16) -> Result<bool, io::Error> {
-        match self.pending_rides.write() {
-            Ok(pending_rides) => Ok(!pending_rides.get(&passenger_id).is_none()),
-            Err(e) => {
-                eprintln!("Error al obtener el lock de escritura en `pending_rides`: {:?}", e);
-                Err(io::Error::new(
+    /// * `passenger_id` - The ID of the passenger.
+    ///
+    /// # Errors
+    /// Returns an `io::Error` if the lock on `pending_rides` cannot be obtained.
+    pub fn has_pending_ride_request(&self, passenger_id: u16) -> Result<bool, io::Error> {
+        self.pending_rides
+            .read()
+            .map(|pending_rides| pending_rides.contains_key(&passenger_id))
+            .map_err(|_| {
+                io::Error::new(
                     io::ErrorKind::Other,
-                    "No se pudo obtener el lock de escritura en `pending_rides`",
-                ))
-            }
-        }
+                    "Failed to acquire read lock on `pending_rides`",
+                )
+            })
     }
 }

@@ -269,18 +269,126 @@ impl Driver {
     /// * `msg` - The message containing the ride request
     pub fn handle_ride_request_as_leader(&mut self, msg: RideRequest) -> Result<(), io::Error> {
 
+        // Si ya hay un RideRequest en proceso, se ignora
+        // TODO: quizas deberiamos prohibir esto en el pasajero
+        if self.ride_manager.has_pending_ride_request(msg.id)? {
+            // Ignorar si ya hay un RideRequest en proceso
+            return Ok(());
+        }
+
+        // lo agrego a los unpaid rides
+        self.ride_manager.insert_unpaid_ride(msg).expect("Error adding unpaid ride");
+
+        // envio el pago a la app
+        self.send_payment(msg).expect("Error sending payment");
+
+        Ok(())
+    }
+
+    /// Handles the payment accepted message from the payment app
+    /// Sends the ride request to the closest driver and adds the driver to the offers
+    /// # Arguments
+    /// * `msg` - The message containing the PaymentAccepted
+    pub fn handle_payment_accepted_as_leader(&mut self, msg: PaymentAccepted) -> Result<(), io::Error> {
+        // obtengo el ride request del unpaid_rides y lo elimino del hashmap
+        let ride_request = match self.ride_manager.remove_unpaid_ride(msg.id) {
+            Ok(ride_request) => ride_request,
+            Err(e) => {
+                eprintln!("Error removing unpaid ride: {:?}", e);
+                return Err(e);
+            }
+        };
+
         /// saves ride in pending_rides
-        self.ride_manager.insert_ride_in_pending(msg)?;
+        self.ride_manager.insert_ride_in_pending(ride_request)?;
 
         /// Logica de a quien se le manda el mensaje
         /// TODO: Ojo que puede devlver cero, hay que ver que hacer ahi
-        let driver_id_to_send = self.get_closest_driver(msg);
+        let driver_id_to_send = self.get_closest_driver(ride_request);
 
         /// Envio el mensaje al driver
-        self.send_ride_request_to_driver(driver_id_to_send, msg)?;
+        self.send_ride_request_to_driver(driver_id_to_send, ride_request)?;
 
         /// Agrego el id del driver al vector de ofertas
         self.ride_manager.insert_in_rides_and_offers(msg.id, driver_id_to_send)?;
+
+        Ok(())
+    }
+
+    /// Handles the payment rejected message from the payment app
+    /// Sends the payment rejected message to the passenger
+    pub fn handle_payment_rejected_as_leader(&mut self, msg: PaymentRejected) -> Result<(), io::Error> {
+        let msg_message_type = MessageType::PaymentRejected(msg);
+        self.send_message_to_passenger(msg_message_type, msg.id)?;
+        Ok(())
+    }
+
+    /// Handles the accept ride message from the driver
+    /// Removes the passenger id from ride_and_offers
+    pub fn handle_accept_ride_as_leader(&mut self, msg: AcceptRide) -> Result<(), io::Error> {
+        // Remove the passenger ID from ride_and_offers in case the passenger wants to take another ride
+        if let Err(e) = self.ride_manager.remove_from_ride_and_offers(msg.passenger_id) {
+            eprintln!(
+                "Error removing passenger ID {} from ride_and_offers: {:?}",
+                msg.passenger_id, e
+            );
+        }
+        Ok(())
+    }
+
+    /// Handles the declined ride from driver as leader
+    /// Sends the ride request to the next closest driver and adds the driver to the offers
+    /// # Arguments
+    /// * `msg` - The message containing the Declined Ride
+    pub fn handle_declined_ride_as_leader(&mut self, msg: DeclineRide) -> Result<(), io::Error> {
+        let mut ride_request = self.ride_manager.get_pending_ride_request(msg.passenger_id)?;
+
+        /// Logica de a quien se le manda el mensaje
+        let driver_id_to_send = self.get_closest_driver(ride_request);
+
+        /// TODO: Hay que ver como manejar este caso, lo que se podria hacer es eliminar todos los ids
+        /// de los driver a los que se les ofrecieron y arrancar de nuevo.
+        if driver_id_to_send == 0 {
+            println!("No hay drivers disponibles para el pasajero con id {}", msg.passenger_id);
+            return Ok(());
+        }
+
+        /// Envio el mensaje al driver
+        self.send_ride_request_to_driver(driver_id_to_send, ride_request)?;
+
+        /// Agrego el id del driver al vector de ofertas
+        self.ride_manager.insert_in_rides_and_offers(ride_request.id, driver_id_to_send)?;
+
+        Ok(())
+    }
+
+    /// Handles the FinishRide message from the driver
+    /// Removes the ride from the pending rides and sends the FinishRide message to the passenger
+    /// # Arguments
+    /// * `msg` - The message containing the FinishRide
+    pub fn handle_finish_ride_as_leader(&mut self, msg: FinishRide) -> Result<(), io::Error> {
+        // Remove the ride from the pending rides
+        self.ride_manager.remove_ride_from_pending(msg.passenger_id)?;
+
+        let msg_message_type = MessageType::FinishRide(msg);
+
+        // Send the FinishRide message to the passenger
+        self.send_message_to_passenger(msg_message_type, msg.passenger_id)?;
+
+        Ok(())
+    }
+
+    /// Finish the ride, send the FinishRide message to the leader
+    /// # Arguments
+    /// * `msg` - The message containing the ride request
+    pub fn handle_finish_ride_as_driver(&mut self, msg: FinishRide) -> Result<(), io::Error> {
+        println!("Driver is now im position: {:?}", self.position);
+
+        // Cambiar el estado del driver a Idle
+        self.state = Sates::Idle;
+
+        // Enviar el mensaje de finalización al líder
+        self.send_message_to_leader(MessageType::FinishRide(msg))?;
 
         Ok(())
     }
@@ -323,32 +431,6 @@ impl Driver {
                 eprintln!("No se encontró un `write_half` para el `driver_id_to_send` especificado");
             }
         });
-        Ok(())
-    }
-
-    /// Handles the declined ride from driver as leader
-    /// Sends the ride request to the next closest driver and adds the driver to the offers
-    /// # Arguments
-    /// * `msg` - The message containing the Declined Ride
-    pub fn handle_declined_ride_as_leader(&mut self, msg: DeclineRide) -> Result<(), io::Error> {
-        let mut ride_request = self.ride_manager.get_pending_ride_request(msg.passenger_id)?;
-
-        /// Logica de a quien se le manda el mensaje
-        let driver_id_to_send = self.get_closest_driver(ride_request);
-
-        /// TODO: Hay que ver como manejar este caso, lo que se podria hacer es eliminar todos los ids
-        /// de los driver a los que se les ofrecieron y arrancar de nuevo.
-        if driver_id_to_send == 0 {
-            println!("No hay drivers disponibles para el pasajero con id {}", msg.passenger_id);
-            return Ok(());
-        }
-
-        /// Envio el mensaje al driver
-        self.send_ride_request_to_driver(driver_id_to_send, ride_request)?;
-
-        /// Agrego el id del driver al vector de ofertas
-        self.ride_manager.insert_in_rides_and_offers(ride_request.id, driver_id_to_send)?;
-
         Ok(())
     }
 
@@ -461,14 +543,6 @@ impl Driver {
         Ok(())
     }
 
-
-
-    fn calculate_travel_duration(&self, ride_request: &RideRequest) -> u64 {
-        let distance = ((ride_request.x_dest as i32 - ride_request.x_origin as i32).abs()) +
-            ((ride_request.y_dest as i32 - ride_request.y_origin as i32).abs());
-        distance as u64
-    }
-
     /// Drive to the destination and finish the ride
     /// # Arguments
     /// * `msg` - The message containing the ride request
@@ -476,7 +550,7 @@ impl Driver {
     fn drive_and_finish(&mut self, ride_request_msg: RideRequest, addr: Addr<Self>) -> Result<(), io::Error> {
         let msg_clone = ride_request_msg.clone();
         let driver_id = self.id.clone();
-        let duration = self.calculate_travel_duration(&msg_clone);
+        let duration = calculate_travel_duration(&msg_clone);
         let position = self.position;
 
         actix::spawn(async move {
@@ -510,16 +584,7 @@ impl Driver {
         Ok(())
     }
 
-    /// Finish the ride, send the FinishRide message to the leader
-    /// # Arguments
-    /// * `msg` - The message containing the ride request
-    pub fn finish_ride(&mut self, msg: FinishRide) -> Result<(), io::Error> {
-        self.state = Sates::Idle;
-        self.send_message_to_leader(MessageType::FinishRide(msg))?;
-        println!("Driver is now im position: {:?}", self.position);
-        Ok(())
-    }
-
+    /// Sends message to the payment app, requesting to make a reservation for 2399
     pub fn send_payment(&mut self, msg: RideRequest) -> Result<(), io::Error>{
         //TODO: Ver el tema de la cantidad pagada
         let message = SendPayment{id: msg.id, amount: 2399};
@@ -547,19 +612,23 @@ impl Driver {
         Ok(())
     }
 
+
     pub fn verify_pending_ride_request(&self, passenger_id: u16) -> Result<(), io::Error> {
-        // Si ya hay un ride request en pending, osea ya se efectuo el pago y esta en viaje
-        // si el pago no se efectuo todavia por x razon, solo se envia el mensaje de pago aceptado y el pasajero se aviva
-        match self.ride_manager.verify_pending_ride_request(passenger_id) {
-            Ok(true) => {
-                println!("SENDING RIDEREQUESTRECONNECTION");
-                // TODO: eventualmente podriamos poner en state en que se encuentra el viaje (asignado, en curso, sin asignar pero pagado, etc)
-                let message = RideRequestReconnection {passenger_id, state: "WaitingDriver".to_string()};
-                self.send_message_to_passenger(MessageType::RideRequestReconnection(message), passenger_id)?;
-            }
-            Ok(false) => { return Ok(()); }
-            Err(e) => {  return Err(e);  }
+        // Verificar si hay una solicitud pendiente
+        let has_pending = self.ride_manager.has_pending_ride_request(passenger_id)?;
+
+        if !has_pending {
+            return Ok(());
         }
+
+        // Enviar mensaje de reconexión al pasajero
+        let message = RideRequestReconnection {
+            passenger_id,
+            state: "WaitingDriver".to_string(),
+        };
+
+        self.send_message_to_passenger(MessageType::RideRequestReconnection(message), passenger_id)?;
+
         Ok(())
     }
 

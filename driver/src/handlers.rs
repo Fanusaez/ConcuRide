@@ -77,16 +77,7 @@ impl Handler<RideRequest> for Driver {
         let is_leader = *self.is_leader.read().unwrap();
 
         if is_leader {
-            match self.ride_manager.verify_pending_ride_request(msg.id) {
-                Ok(true) => { return (); }
-                Err(e) => {
-                    eprintln!("Error verifying pending ride request: {:?}", e);
-                }
-                _ => {}
-            }
-            println!("Leader recived ride request from passenger {}", msg.id);
-            self.ride_manager.insert_unpaid_ride(msg).expect("Error adding unpaid ride");
-            self.send_payment(msg).expect("Error sending payment");
+            self.handle_ride_request_as_leader(msg).expect("Error handling ride request as leader");
         } else {
             self.handle_ride_request_as_driver(msg, ctx.address()).expect("Error handling ride request as driver");
         }
@@ -102,17 +93,7 @@ impl Handler<PaymentAccepted> for Driver {
     fn handle(&mut self, msg: PaymentAccepted, _ctx: &mut Self::Context) -> Self::Result {
 
         println!("Leader {} received the payment accepted message for passenger with id {}", self.id, msg.id);
-
-        let ride_request = self.ride_manager.remove_unpaid_ride(msg.id);
-
-        match ride_request {
-            Ok(ride_request) => {
-                self.handle_ride_request_as_leader(ride_request).unwrap()
-            }
-            Err(e) => {
-                eprintln!("Error removing unpaid ride: {:?}", e);
-            }
-        }
+        self.handle_payment_accepted_as_leader(msg).unwrap();
     }
 }
 
@@ -120,17 +101,11 @@ impl Handler<PaymentRejected> for Driver {
     type Result = ();
 
     fn handle(&mut self, msg: PaymentRejected, ctx: &mut Self::Context) -> Self::Result {
-        let msg_message_type = MessageType::PaymentRejected(msg);
-        match self.send_message_to_passenger(msg_message_type, msg.id) {
-            Ok(_) => {}
-            Err(e) => {
-                eprintln!("Error sending message to passenger: {:?}", e);
-            }
-        }
+        println!("Leader {} received the payment rejected message for passenger with id {}", self.id, msg.id);
+        self.handle_payment_rejected_as_leader(msg).unwrap();
     }
 
 }
-
 
 impl Handler<AcceptRide> for Driver {
     type Result = ();
@@ -138,15 +113,7 @@ impl Handler<AcceptRide> for Driver {
     /// Ride offered made to driver was accepted
     /// Remove the id of the passenger from ride_and_offers and notify the passenger?
     fn handle(&mut self, msg: AcceptRide, _ctx: &mut Self::Context) -> Self::Result {
-        // remove the passenger id from ride_and_offers in case the passenger wants to take another ride
-        match self.ride_manager.remove_from_ride_and_offers(msg.passenger_id) {
-            Ok(_) => {}
-            Err(e) => {
-                eprintln!("Error removing passenger id from ride_and_offers: {:?}", e);
-            }
-        }
-
-        /// TODO: Pending_rides se saca una vez que notifico al pasajero
+        self.handle_accept_ride_as_leader(msg).unwrap();
         println!("Ride with id {} was accepted by driver {}", msg.passenger_id, msg.driver_id);
     }
 }
@@ -176,22 +143,10 @@ impl Handler<FinishRide> for Driver {
         let is_leader = *self.is_leader.read().unwrap();
         if is_leader {
             println!("Passenger with id {} has been dropped off by driver with id {} ", msg.passenger_id, msg.driver_id);
-            match self.ride_manager.remove_ride_from_pending(msg.passenger_id) {
-                Ok(_) => {}
-                Err(e) => {
-                    eprintln!("Error removing ride from pending rides: {:?}", e);
-                }
-            }
-            let msg_message_type = MessageType::FinishRide(msg);
-            match self.send_message_to_passenger(msg_message_type, msg.passenger_id) {
-                Ok(_) => {}
-                Err(e) => {
-                    eprintln!("Error sending message to passenger: {:?}", e);
-                }
-            }
+            self.handle_finish_ride_as_leader(msg).unwrap();
         } else {
             // driver send FinishRide to the leader and change state to Idle
-            self.finish_ride(msg).unwrap()
+            self.handle_finish_ride_as_driver(msg).unwrap()
         }
     }
 }
@@ -209,6 +164,11 @@ impl Handler<StreamMessage> for Driver {
     }
 }
 
+/// Handles the new connection message, this message is received as a handshake between the driver and the passenger
+/// The driver will store the passenger id and the write half of the stream in the passengers_write_half hashmap
+/// If the passenger was already connected, the previous connection will be removed
+/// If the passenger was already connected, the driver will check if there is a pending ride request for the passenger
+/// If there is a pending ride request, the leader will send
 impl Handler<NewConnection> for Driver {
     type Result = ();
 
@@ -241,7 +201,6 @@ impl Handler<NewConnection> for Driver {
 
         // si ya hubo alguna conexion, verificar que no haya un RideRequest pendiente
         if previous_connection {
-            println!("VERIFICANDO RIDE REQUEST PENDIENTE");
             self.verify_pending_ride_request(new_passenger_id).unwrap();
         }
 
