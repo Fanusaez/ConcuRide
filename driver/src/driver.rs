@@ -477,27 +477,25 @@ impl Driver {
         let msg_clone = ride_request_msg.clone();
         let driver_id = self.id.clone();
         let duration = self.calculate_travel_duration(&msg_clone);
+        let position = self.position;
 
-        thread::spawn(move || {
+        actix::spawn(async move {
             let mut current_position = (msg_clone.x_origin, msg_clone.y_origin);
-            let advancement = 10;  // division del camino en avances iguales
+            let advancement = 10;  // Dividir el viaje en 10 pasos
             let x_km = (msg_clone.x_dest as i32 - msg_clone.x_origin as i32) as f64 / advancement as f64;
             let y_km = (msg_clone.y_dest as i32 - msg_clone.y_origin as i32) as f64 / advancement as f64;
 
-            let travel_thread = thread::spawn(move || {
-                for i in 0..advancement {
-                    current_position.0 = (msg_clone.x_origin as f64 + x_km * i as f64) as u16;
-                    current_position.1 = (msg_clone.y_origin as f64 + y_km * i as f64) as u16;
-                    /// TODO actualizar posicion en tiempo real
-                    println!("Conductor {}: Actualizando posición a {:?}", driver_id, current_position);
+            for i in 0..advancement {
+                current_position.0 = (msg_clone.x_origin as f64 + x_km * i as f64) as u16;
+                current_position.1 = (msg_clone.y_origin as f64 + y_km * i as f64) as u16;
 
-                    // simula espera
-                    thread::sleep(Duration::from_secs((duration / advancement as u64) as u64));
-                }
-            });
+                println!("Conductor {}: Actualizando posición a {:?}", driver_id, current_position);
 
-            travel_thread.join().unwrap();
+                // Simula espera
+                tokio::time::sleep(Duration::from_secs(duration / advancement as u64)).await;
+            }
 
+            // Enviar mensaje al actor para finalizar el viaje
             let finish_ride = FinishRide {
                 passenger_id: ride_request_msg.id,
                 driver_id,
@@ -506,6 +504,7 @@ impl Driver {
             addr.do_send(finish_ride);
         });
 
+        // Actualiza la posición final en el actor
         self.position = (msg_clone.x_dest.into(), msg_clone.y_dest.into());
 
         Ok(())
@@ -553,6 +552,7 @@ impl Driver {
         // si el pago no se efectuo todavia por x razon, solo se envia el mensaje de pago aceptado y el pasajero se aviva
         match self.ride_manager.verify_pending_ride_request(passenger_id) {
             Ok(true) => {
+                println!("SENDING RIDEREQUESTRECONNECTION");
                 // TODO: eventualmente podriamos poner en state en que se encuentra el viaje (asignado, en curso, sin asignar pero pagado, etc)
                 let message = RideRequestReconnection {passenger_id, state: "WaitingDriver".to_string()};
                 self.send_message_to_passenger(MessageType::RideRequestReconnection(message), passenger_id)?;

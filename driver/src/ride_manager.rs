@@ -139,12 +139,19 @@ impl RideManager {
 
     }
 
+    /// Verifies if a passenger has a pending ride request, if it does -> True, else -> False
+    /// # Arguments
+    /// * `passenger_id` - The id of the passenger
     pub fn verify_pending_ride_request(&self, passenger_id: u16) -> Result<bool, io::Error> {
-        let pending_rides = self.pending_rides.read().map_err(|e| {
-            eprintln!("Error al obtener el lock de lectura en `pending_rides`: {:?}", e);
-            io::Error::new(io::ErrorKind::Other, "Error al obtener el lock de lectura en `pending_rides`")
-        })?;
-
-        Ok(pending_rides.get(&passenger_id).is_none())
+        match self.pending_rides.write() {
+            Ok(pending_rides) => Ok(!pending_rides.get(&passenger_id).is_none()),
+            Err(e) => {
+                eprintln!("Error al obtener el lock de escritura en `pending_rides`: {:?}", e);
+                Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    "No se pudo obtener el lock de escritura en `pending_rides`",
+                ))
+            }
+        }
     }
 }

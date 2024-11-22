@@ -1,4 +1,5 @@
 use std::io;
+use std::io::Error;
 use tokio::io::{split, AsyncBufReadExt, BufReader, AsyncWriteExt, WriteHalf, AsyncReadExt, ReadHalf};
 use actix::{Actor, AsyncContext, Context, Handler, StreamHandler};
 use tokio_stream::wrappers::LinesStream;
@@ -12,6 +13,7 @@ impl Actor for Driver {
 
     fn stopping(&mut self, _: &mut Self::Context) -> actix::Running {
         // Evita que el actor muera mientras tenga streams activos
+        // TODO: puse esta condicion rando, se podria poner otra que sea mas logica
         if !self.active_drivers.read().unwrap().is_empty() {
             actix::Running::Continue
         } else {
@@ -75,6 +77,13 @@ impl Handler<RideRequest> for Driver {
         let is_leader = *self.is_leader.read().unwrap();
 
         if is_leader {
+            match self.ride_manager.verify_pending_ride_request(msg.id) {
+                Ok(true) => { return (); }
+                Err(e) => {
+                    eprintln!("Error verifying pending ride request: {:?}", e);
+                }
+                _ => {}
+            }
             println!("Leader recived ride request from passenger {}", msg.id);
             self.ride_manager.insert_unpaid_ride(msg).expect("Error adding unpaid ride");
             self.send_payment(msg).expect("Error sending payment");
@@ -204,7 +213,6 @@ impl Handler<NewConnection> for Driver {
     type Result = ();
 
     fn handle(&mut self, msg: NewConnection, _ctx: &mut Self::Context) -> Self::Result {
-        println!("Entro a new connection");
         let mut passengers_write_half = self.passengers_write_half.write().unwrap();
         let new_passenger_id = msg.passenger_id;
         let old_passenger_id = msg.used_port;
@@ -233,6 +241,7 @@ impl Handler<NewConnection> for Driver {
 
         // si ya hubo alguna conexion, verificar que no haya un RideRequest pendiente
         if previous_connection {
+            println!("VERIFICANDO RIDE REQUEST PENDIENTE");
             self.verify_pending_ride_request(new_passenger_id).unwrap();
         }
 
