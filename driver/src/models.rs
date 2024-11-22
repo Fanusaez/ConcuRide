@@ -39,7 +39,7 @@ pub struct FinishRide {
 #[rtype(result = "()")]
 pub struct SendPayment {
     pub id: u16,
-    pub amount: i32,
+    pub amount: u16,
 }
 
 #[derive(Serialize, Deserialize, Message, Debug, Clone, Copy)]
@@ -52,6 +52,7 @@ pub struct PaymentRejected {
 #[rtype(result = "()")]
 pub struct PaymentAccepted {
     pub id: u16,
+    pub amount: u16,
 }
 
 #[derive(Message, Debug)]

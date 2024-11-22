@@ -404,6 +404,9 @@ impl Driver {
         // Send the FinishRide message to the passenger
         self.send_message_to_passenger(msg_message_type, msg.passenger_id)?;
 
+        // TODO: Pay ride to the driver
+        //self.pay_ride_to_driver(msg.passenger_id, msg.driver_id);
+
         Ok(())
     }
 
@@ -644,6 +647,7 @@ impl Driver {
 
         Ok(())
     }
+
 
     /// Checks if there is a pending ride request for the passenger
     /// If there is, sends a message to the passenger to reconnect
