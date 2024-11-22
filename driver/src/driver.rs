@@ -318,8 +318,7 @@ impl Driver {
     /// Handles the payment rejected message from the payment app
     /// Sends the payment rejected message to the passenger
     pub fn handle_payment_rejected_as_leader(&mut self, msg: PaymentRejected) -> Result<(), io::Error> {
-        let msg_message_type = MessageType::PaymentRejected(msg);
-        self.send_message_to_passenger(msg_message_type, msg.id)?;
+        self.send_message_to_passenger(MessageType::PaymentRejected(msg), msg.id)?;
         Ok(())
     }
 
@@ -434,6 +433,7 @@ impl Driver {
         Ok(())
     }
 
+    /// Driver's function
     /// Sends the AcceptRide message to the leader
     /// # Arguments
     /// * `msg` - The message containing the ride request
@@ -457,6 +457,7 @@ impl Driver {
         Ok(())
     }
 
+    /// Driver's function
     /// Sends the DeclineRide message to the leader
     /// # Arguments
     /// * `msg` - The message containing the ride request
@@ -521,7 +522,8 @@ impl Driver {
         Ok(())
     }
 
-    /// Sends a message to the leader, only used by the drivers
+    /// Driver's function
+    /// Sends a message to the leader
     /// # Arguments
     /// * `message` - The message to send
     pub fn send_message_to_leader(&self, message: MessageType) -> Result<(), io::Error> {
@@ -543,7 +545,8 @@ impl Driver {
         Ok(())
     }
 
-    /// Drive to the destination and finish the ride
+    /// Driver's function
+    /// Simulates the travel from the origin to the destination
     /// # Arguments
     /// * `msg` - The message containing the ride request
     /// * `addr` - The address of the driver
@@ -612,7 +615,10 @@ impl Driver {
         Ok(())
     }
 
-
+    /// Checks if there is a pending ride request for the passenger
+    /// If there is, sends a message to the passenger to reconnect
+    /// # Arguments
+    /// * `passenger_id` - The id of the passenger
     pub fn verify_pending_ride_request(&self, passenger_id: u16) -> Result<(), io::Error> {
         // Verificar si hay una solicitud pendiente
         let has_pending = self.ride_manager.has_pending_ride_request(passenger_id)?;
