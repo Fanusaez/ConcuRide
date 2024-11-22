@@ -90,10 +90,10 @@ impl Handler<PaymentAccepted> for Driver {
 
     /// Only receved by leader
     /// Handles the payment accepted message
-    fn handle(&mut self, msg: PaymentAccepted, _ctx: &mut Self::Context) -> Self::Result {
+    fn handle(&mut self, msg: PaymentAccepted, ctx: &mut Self::Context) -> Self::Result {
 
         println!("Leader {} received the payment accepted message for passenger with id {}", self.id, msg.id);
-        self.handle_payment_accepted_as_leader(msg).unwrap();
+        self.handle_payment_accepted_as_leader(msg, ctx.address()).unwrap();
     }
 }
 
@@ -123,9 +123,9 @@ impl Handler<DeclineRide> for Driver {
     /// Only received by leader
     /// Ride offered made to driver was declined
     /// TODO: OFFER THE RIDE TO ANOTHER DRIVER
-    fn handle(&mut self, msg: DeclineRide, _ctx: &mut Self::Context) -> Self::Result {
+    fn handle(&mut self, msg: DeclineRide, ctx: &mut Self::Context) -> Self::Result {
         println!("Lider {} received the declined message for the ride request from driver {}", self.id, msg.driver_id);
-        match self.handle_declined_ride_as_leader(msg) {
+        match self.handle_declined_ride_as_leader(msg, ctx.address()) {
             Ok(_) => {}
             Err(e) => {
                 eprintln!("Error handling declined ride as leader: {:?}", e);

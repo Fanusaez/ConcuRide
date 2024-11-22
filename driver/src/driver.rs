@@ -4,6 +4,7 @@ use std::{io, thread};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use actix::{Actor, Addr, AsyncContext, StreamHandler};
+use futures::SinkExt;
 use tokio::io::{split, AsyncBufReadExt, BufReader, AsyncWriteExt, WriteHalf, AsyncReadExt, ReadHalf};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_stream::wrappers::LinesStream;
@@ -289,29 +290,71 @@ impl Driver {
     /// Sends the ride request to the closest driver and adds the driver to the offers
     /// # Arguments
     /// * `msg` - The message containing the PaymentAccepted
-    pub fn handle_payment_accepted_as_leader(&mut self, msg: PaymentAccepted) -> Result<(), io::Error> {
+    pub fn handle_payment_accepted_as_leader(&mut self, msg: PaymentAccepted, addr: Addr<Self>) -> Result<(), io::Error> {
         // obtengo el ride request del unpaid_rides y lo elimino del hashmap
-        let ride_request = match self.ride_manager.remove_unpaid_ride(msg.id) {
-            Ok(ride_request) => ride_request,
-            Err(e) => {
-                eprintln!("Error removing unpaid ride: {:?}", e);
-                return Err(e);
-            }
-        };
+        let ride_request = self.ride_manager.remove_unpaid_ride(msg.id)?;
 
         /// saves ride in pending_rides
         self.ride_manager.insert_ride_in_pending(ride_request)?;
 
+        /// Busco el driver mas cercano y le envio el RideRequest
+        self.search_driver_and_send_ride(ride_request, addr)?;
+
+        Ok(())
+    }
+
+    /// Search the closest driver to the passenger and send the ride request
+    /// Insert the driver id in the ride_and_offers hashmap
+    /// # Arguments
+    /// * `ride_request` - The ride request to send
+    fn search_driver_and_send_ride(&mut self, ride_request: RideRequest, addr: Addr<Self>) -> Result<(), io::Error> {
         /// Logica de a quien se le manda el mensaje
         /// TODO: Ojo que puede devlver cero, hay que ver que hacer ahi
         let driver_id_to_send = self.get_closest_driver(ride_request);
+
+        println!("HOLAAAA");
+
+        /// Si no hay drivers disponibles
+        if driver_id_to_send == 0 {
+            println!("No hay drivers disponibles para el pasajero con id {}, se intentara mas tarde", ride_request.id);
+
+            // Elimino todas las ofertas que se hicieron
+            self.ride_manager.remove_from_ride_and_offers(ride_request.id)?;
+
+            // Pauso y reinicio la busqueda de drivers
+            self.pause_and_restart_driver_search(ride_request,addr)?;
+
+            return Ok(());
+        }
 
         /// Envio el mensaje al driver
         self.send_ride_request_to_driver(driver_id_to_send, ride_request)?;
 
         /// Agrego el id del driver al vector de ofertas
-        self.ride_manager.insert_in_rides_and_offers(msg.id, driver_id_to_send)?;
+        self.ride_manager.insert_in_rides_and_offers(ride_request.id, driver_id_to_send)?;
 
+        Ok(())
+    }
+
+    /// Pause and restart the driver search, so we dont do a busy wait
+    fn pause_and_restart_driver_search(&mut self, ride_request: RideRequest, addr: Addr<Self>) -> Result<(), io::Error> {
+        let ride_request_clone = ride_request.clone();
+
+        actix::spawn(async move {
+
+            println!("PAUSAMOS LA BUSQUEDA");
+            // Simula espera
+            tokio::time::sleep(Duration::from_secs(3)).await;
+
+            // TODO: Crear un nuevo mensaje para este proposito
+            let response = DeclineRide {
+                passenger_id: ride_request_clone.id,
+                driver_id: 0,
+            };
+
+            addr.do_send(response);
+
+        });
         Ok(())
     }
 
@@ -339,24 +382,11 @@ impl Driver {
     /// Sends the ride request to the next closest driver and adds the driver to the offers
     /// # Arguments
     /// * `msg` - The message containing the Declined Ride
-    pub fn handle_declined_ride_as_leader(&mut self, msg: DeclineRide) -> Result<(), io::Error> {
-        let mut ride_request = self.ride_manager.get_pending_ride_request(msg.passenger_id)?;
+    pub fn handle_declined_ride_as_leader(&mut self, msg: DeclineRide, addr: Addr<Self>) -> Result<(), io::Error> {
+        let ride_request = self.ride_manager.get_pending_ride_request(msg.passenger_id)?;
 
-        /// Logica de a quien se le manda el mensaje
-        let driver_id_to_send = self.get_closest_driver(ride_request);
-
-        /// TODO: Hay que ver como manejar este caso, lo que se podria hacer es eliminar todos los ids
-        /// de los driver a los que se les ofrecieron y arrancar de nuevo.
-        if driver_id_to_send == 0 {
-            println!("No hay drivers disponibles para el pasajero con id {}", msg.passenger_id);
-            return Ok(());
-        }
-
-        /// Envio el mensaje al driver
-        self.send_ride_request_to_driver(driver_id_to_send, ride_request)?;
-
-        /// Agrego el id del driver al vector de ofertas
-        self.ride_manager.insert_in_rides_and_offers(ride_request.id, driver_id_to_send)?;
+        // vuelvo a buscar el driver mas cercano
+        self.search_driver_and_send_ride(ride_request, addr)?;
 
         Ok(())
     }
