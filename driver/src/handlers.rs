@@ -51,6 +51,9 @@ impl StreamHandler<Result<String, io::Error>> for Driver {
                     MessageType::NewConnection(new_connection) => {
                         ctx.address().do_send(new_connection);
                     }
+                    MessageType::PayRide(pay_ride) => {
+                        ctx.address().do_send(pay_ride);
+                    }
                     _ => {
                         println!("Unknown Message");
                     }
@@ -204,5 +207,12 @@ impl Handler<NewConnection> for Driver {
             self.verify_pending_ride_request(new_passenger_id).unwrap();
         }
 
+    }
+}
+
+impl Handler<PayRide> for Driver {
+    type Result = ();
+    fn handle(&mut self, msg: PayRide, ctx: &mut Self::Context) -> Self::Result {
+        println!("Dinero ingresado: {}, del viaje {}", msg.amount, msg.ride_id);
     }
 }

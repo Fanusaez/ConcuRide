@@ -72,15 +72,11 @@ impl Driver {
         // Auxiliar structures
         let mut active_drivers: HashMap<u16, (Option<ReadHalf<TcpStream>>, Option<WriteHalf<TcpStream>>)> = HashMap::new();
         let mut drivers_last_position: HashMap<u16, (i32, i32)> = HashMap::new();
-        let pending_rides: Arc<RwLock<HashMap<u16, RideRequest>>> = Arc::new(RwLock::new(HashMap::new()));
-        let ride_and_offers: Arc::<RwLock<HashMap<u16, Vec<u16>>>> = Arc::new(RwLock::new(HashMap::new()));
         let passengers_write_half: HashMap<u16, Option<WriteHalf<TcpStream>>> = HashMap::new();
 
         // Payment app and connection
         let mut payment_write_half: Option<WriteHalf<TcpStream>> = None;
         let mut payment_read_half: Option<ReadHalf<TcpStream>> = None;
-
-        let unpaid_rides: Arc<RwLock<HashMap<u16, RideRequest>>>= Arc::new(RwLock::new(HashMap::new()));
 
         // Remove the leader port from the list of drivers
         drivers_ports.remove(LIDER_PORT_IDX);
@@ -126,11 +122,7 @@ impl Driver {
                 state: Sates::Idle,
                 drivers_last_position: drivers_last_position_arc.clone(),
                 payment_write_half: payment_write_half_arc.clone(),
-                ride_manager: RideManager {
-                    pending_rides: pending_rides.clone(),
-                    unpaid_rides: unpaid_rides.clone(),
-                    ride_and_offers: ride_and_offers.clone(),
-                },
+                ride_manager: RideManager::new(),
 
             }
         });
@@ -300,6 +292,9 @@ impl Driver {
         /// Busco el driver mas cercano y le envio el RideRequest
         self.search_driver_and_send_ride(ride_request, addr)?;
 
+        // Inserto el id y el pago en la lista de viajes pagos
+        self.ride_manager.insert_ride_in_paid_rides(msg.id, msg);
+
         Ok(())
     }
 
@@ -405,8 +400,48 @@ impl Driver {
         self.send_message_to_passenger(msg_message_type, msg.passenger_id)?;
 
         // TODO: Pay ride to the driver
-        //self.pay_ride_to_driver(msg.passenger_id, msg.driver_id);
+        let payment = self.ride_manager.get_ride_from_paid_rides(msg.passenger_id)?;
+        // Falta enviarle el mensaje de pago al driver
+        let pay_ride_msg = PayRide{ride_id:msg.passenger_id, amount:payment.amount};
+        self.send_payment_to_driver(msg.driver_id, pay_ride_msg)?;
 
+        Ok(())
+    }
+
+    pub fn send_payment_to_driver(&mut self, driver_id: u16, msg: PayRide) -> Result<(), io::Error> {
+        let mut active_drivers_clone = Arc::clone(&self.active_drivers);
+        let msg_clone = msg.clone();
+
+        actix::spawn(async move {
+            let mut active_drivers = match active_drivers_clone.write() {
+                Ok(guard) => guard,
+                Err(e) => {
+                    eprintln!("Error al obtener el lock de escritura en `active_drivers`: {:?}", e);
+                    return;
+                }
+            };
+
+            if let Some((_, write_half)) = active_drivers.get_mut(&driver_id) {
+                let response = MessageType::PayRide(msg_clone);
+                let serialized = match serde_json::to_string(&response) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        eprintln!("Error serializando el mensaje: {:?}", e);
+                        return;
+                    }
+                };
+
+                if let Some(write_half) = write_half.as_mut() {
+                    if let Err(e) = write_half.write_all(format!("{}\n", serialized).as_bytes()).await {
+                        eprintln!("Error al enviar el mensaje: {:?}", e);
+                    }
+                } else {
+                    eprintln!("No se pudo enviar el mensaje: no hay conexión activa");
+                }
+            } else {
+                eprintln!("No se encontró un `write_half` para el `driver_id_to_send` especificado");
+            }
+        });
         Ok(())
     }
 

@@ -55,6 +55,13 @@ pub struct PaymentAccepted {
     pub amount: u16,
 }
 
+#[derive(Serialize, Deserialize, Message, Debug, Clone, Copy)]
+#[rtype(result = "()")]
+pub struct PayRide {
+    pub ride_id: u16,
+    pub amount: u16,
+}
+
 #[derive(Message, Debug)]
 #[rtype(result = "()")]
 pub struct StreamMessage {
@@ -88,4 +95,5 @@ pub enum MessageType {
     PaymentRejected(PaymentRejected),
     NewConnection(NewConnection),
     RideRequestReconnection(RideRequestReconnection),
+    PayRide(PayRide),
 }
