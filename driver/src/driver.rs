@@ -631,10 +631,11 @@ impl Driver {
         Ok(())
     }
 
-    /// Sends message to the payment app, requesting to make a reservation for 2399
+    /// Sends message to the payment app containing the ride price
     pub fn send_payment(&mut self, msg: RideRequest) -> Result<(), io::Error>{
         //TODO: Ver el tema de la cantidad pagada
-        let message = SendPayment{id: msg.id, amount: 2399};
+        let ride_price = msg.calculate_price();
+        let message = SendPayment{id: msg.id, amount: ride_price};
         self.send_message_to_payment_app(MessageType::SendPayment(message))?;
         Ok(())
     }
