@@ -5,7 +5,6 @@ use std::sync::RwLock;
 
 use crate::models::*;
 
-
 pub struct RideManager {
     /// Pending rides, already paid rides, waiting to be accepted by a driver
     pub pending_rides: Arc<RwLock<HashMap<u16, RideRequest>>>,
@@ -27,11 +26,14 @@ impl RideManager {
         let mut pending_rides = self.pending_rides.write();
         match pending_rides {
             Ok(mut pending_rides) => {
-                pending_rides.insert(msg.id.clone(), msg.clone());
-            },
+                pending_rides.insert(msg.id, msg);
+            }
             Err(e) => {
-                eprintln!("Error al obtener el lock de escritura en `pending_rides`: {:?}", e);
-                return Err(io::Error::new(io::ErrorKind::Other, "Error al obtener el lock de escritura en `pending_rides`"));
+                eprintln!("Error obtaining writing lock from `pending_rides`: {:?}", e);
+                return Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    "Error obtaining writing lock from `pending_rides`",
+                ));
             }
         }
         Ok(())
@@ -42,12 +44,18 @@ impl RideManager {
         match pending_rides {
             Ok(mut pending_rides) => {
                 if pending_rides.remove(&passenger_id).is_none() {
-                    eprintln!("RideRequest with id {} not found in pending_rides", passenger_id);
+                    eprintln!(
+                        "RideRequest with id {} not found in pending_rides",
+                        passenger_id
+                    );
                 }
-            },
+            }
             Err(e) => {
-                eprintln!("Error al obtener el lock de escritura en `pending_rides`: {:?}", e);
-                return Err(io::Error::new(io::ErrorKind::Other, "Error al obtener el lock de escritura en `pending_rides`"));
+                eprintln!("Error obtaining writing lock from `pending_rides`: {:?}", e);
+                return Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    "Error obtaining writing lock from `pending_rides`",
+                ));
             }
         }
         Ok(())
@@ -57,7 +65,11 @@ impl RideManager {
     /// # Arguments
     /// * `passenger_id` - The id of the passenger
     /// * `driver_id` - The id of the driver
-    pub fn insert_in_rides_and_offers(&self, passenger_id: u16, driver_id: u16) -> Result<(), io::Error> {
+    pub fn insert_in_rides_and_offers(
+        &self,
+        passenger_id: u16,
+        driver_id: u16,
+    ) -> Result<(), io::Error> {
         let mut ride_and_offers = self.ride_and_offers.write();
         match ride_and_offers {
             Ok(mut ride_and_offers) => {
@@ -66,10 +78,16 @@ impl RideManager {
                 } else {
                     ride_and_offers.insert(passenger_id, vec![driver_id]);
                 }
-            },
+            }
             Err(e) => {
-                eprintln!("Error al obtener el lock de escritura en `ride_and_offers`: {:?}", e);
-                return Err(io::Error::new(io::ErrorKind::Other, "Error al obtener el lock de escritura en `ride_and_offers`"));
+                eprintln!(
+                    "Error obtaining writing lock from `ride_and_offers`: {:?}",
+                    e
+                );
+                return Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    "Error obtaining writing lock from `ride_and_offers`",
+                ));
             }
         }
         Ok(())
@@ -80,12 +98,21 @@ impl RideManager {
         match ride_and_offers {
             Ok(mut ride_and_offers) => {
                 if ride_and_offers.remove(&passenger_id).is_none() {
-                    eprintln!("RideRequest with id {} not found in ride_and_offers", passenger_id);
+                    eprintln!(
+                        "RideRequest with id {} not found in ride_and_offers",
+                        passenger_id
+                    );
                 }
-            },
+            }
             Err(e) => {
-                eprintln!("Error al obtener el lock de escritura en `ride_and_offers`: {:?}", e);
-                return Err(io::Error::new(io::ErrorKind::Other, "Error al obtener el lock de escritura en `ride_and_offers`"));
+                eprintln!(
+                    "Error obtaining writing lock from `ride_and_offers`: {:?}",
+                    e
+                );
+                return Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    "Error obtaining writing lock from `ride_and_offers`",
+                ));
             }
         }
         Ok(())
@@ -98,11 +125,14 @@ impl RideManager {
         let mut unpaid_rides = self.unpaid_rides.write();
         match unpaid_rides {
             Ok(mut unpaid_rides) => {
-                unpaid_rides.insert(msg.id.clone(), msg.clone());
-            },
+                unpaid_rides.insert(msg.id, msg);
+            }
             Err(e) => {
-                eprintln!("Error al obtener el lock de escritura en `unpaid_rides`: {:?}", e);
-                return Err(io::Error::new(io::ErrorKind::Other, "Error al obtener el lock de escritura en `unpaid_rides`"));
+                eprintln!("Error obtaining writing lock from `unpaid_rides`: {:?}", e);
+                return Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    "Error obtaining writing lock from `unpaid_rides`",
+                ));
             }
         }
         Ok(())
@@ -110,15 +140,24 @@ impl RideManager {
 
     pub fn remove_unpaid_ride(&self, passenger_id: u16) -> Result<RideRequest, io::Error> {
         let mut unpaid_rides = self.unpaid_rides.write().map_err(|e| {
-            eprintln!("Error al obtener el lock de escritura en `unpaid_rides`: {:?}", e);
-            io::Error::new(io::ErrorKind::Other, "Error al obtener el lock de escritura en `unpaid_rides`")
+            eprintln!("Error obtaining writing lock from `unpaid_rides`: {:?}", e);
+            io::Error::new(
+                io::ErrorKind::Other,
+                "Error obtaining writing lock from `unpaid_rides`",
+            )
         })?;
 
         if let Some(ride_request) = unpaid_rides.remove(&passenger_id) {
             Ok(ride_request)
         } else {
-            eprintln!("RideRequest with id {} not found in unpaid_rides", passenger_id);
-            Err(io::Error::new(io::ErrorKind::NotFound, "RideRequest not found in unpaid_rides"))
+            eprintln!(
+                "RideRequest with id {} not found in unpaid_rides",
+                passenger_id
+            );
+            Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "RideRequest not found in unpaid_rides",
+            ))
         }
     }
 
@@ -129,17 +168,25 @@ impl RideManager {
     /// * A copy of the RideRequest
     pub fn get_pending_ride_request(&self, passenger_id: u16) -> Result<RideRequest, io::Error> {
         let pending_rides = self.pending_rides.read().map_err(|e| {
-            eprintln!("Error al obtener el lock de lectura en `pending_rides`: {:?}", e);
-            io::Error::new(io::ErrorKind::Other, "Error al obtener el lock de lectura en `pending_rides`")
+            eprintln!("Error obtaining writing lock from `pending_rides`: {:?}", e);
+            io::Error::new(
+                io::ErrorKind::Other,
+                "Error obtaining writing lock from `pending_rides`",
+            )
         })?;
 
         if let Some(ride_request) = pending_rides.get(&passenger_id) {
             Ok(ride_request.clone())
         } else {
-            eprintln!("RideRequest with id {} not found in pending_rides", passenger_id);
-            Err(io::Error::new(io::ErrorKind::NotFound, "RideRequest not found in pending_rides"))
+            eprintln!(
+                "RideRequest with id {} not found in pending_rides",
+                passenger_id
+            );
+            Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "RideRequest not found in 'pending_rides'",
+            ))
         }
-
     }
 
     /// Verifies if a passenger has a pending ride request.
@@ -171,22 +218,44 @@ impl RideManager {
         }
     }
 
-    /// TODO: Manejar errores
-    pub fn insert_ride_in_paid_rides(&self, ride_id: u16, msg: PaymentAccepted) {
-        self.paid_rides.write().unwrap().insert(ride_id, msg);
+    /// Inserts ride in paid_rides with the ride_id as the key and the
+    /// PaymentAccepted msg as the value
+    pub fn insert_ride_in_paid_rides(
+        &self,
+        ride_id: u16,
+        msg: PaymentAccepted,
+    ) -> Result<(), io::Error> {
+        let mut rides = self.paid_rides.write().map_err(|e| {
+            eprintln!("Error obtaining write lock: {:?}", e);
+            io::Error::new(io::ErrorKind::Other, "PoisonError")
+        })?;
+        rides.insert(ride_id, msg);
+        Ok(())
     }
 
     /// Removes PaymentAccepted with the information of the payment and returns it
     pub fn get_ride_from_paid_rides(&self, ride_id: u16) -> Result<PaymentAccepted, io::Error> {
         let mut paid_rides = self.paid_rides.write().map_err(|e| {
-            eprintln!("Error al obtener el lock de lectura en `paid_rides`: {:?}", e);
-            io::Error::new(io::ErrorKind::Other, "Error al obtener el lock de lectura en `paid_rides`")
+            eprintln!(
+                "Error obtaining writing lock from `paid_rides`: {:?}",
+                e
+            );
+            io::Error::new(
+                io::ErrorKind::Other,
+                "Error writing lock from `paid_rides`",
+            )
         })?;
         if let Some(payment) = paid_rides.remove(&ride_id) {
             Ok(payment)
         } else {
-            eprintln!("PaymentAccepted with id {} not found in paid_rides", ride_id);
-            Err(io::Error::new(io::ErrorKind::NotFound, "PaymentAccepted not found in paid_rides"))
+            eprintln!(
+                "PaymentAccepted with id {} not found in paid_rides",
+                ride_id
+            );
+            Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "PaymentAccepted not found in paid_rides",
+            ))
         }
     }
 }
