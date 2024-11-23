@@ -73,6 +73,18 @@ pub struct RideRequestReconnection {
     pub passenger_id: u16,
     pub state: String,
 }
+#[derive(Serialize, Deserialize, Debug, Clone, Message)]
+#[rtype(result = "()")]
+pub struct Ping {
+    pub id_sender: u16,
+    pub id_receiver: u16,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Message)]
+#[rtype(result = "()")]
+pub struct SendPingTo {
+    pub id_to_send: u16,
+}
 
 #[derive(Serialize, Deserialize, Message, Debug, Clone, Copy)]
 #[rtype(result = "()")]
@@ -94,5 +106,8 @@ pub enum MessageType {
     PaymentRejected(PaymentRejected),
     NewConnection(NewConnection),
     RideRequestReconnection(RideRequestReconnection),
+    Ping(Ping),
+    SendPingTo(SendPingTo),
     PositionUpdate(PositionUpdate),
+
 }

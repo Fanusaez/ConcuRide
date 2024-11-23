@@ -2,6 +2,7 @@ use std::cmp::PartialEq;
 use std::collections::HashMap;
 use std::{io, thread};
 use std::sync::{Arc, RwLock};
+use std::thread::sleep;
 use std::time::Duration;
 use actix::{Actor, Addr, AsyncContext, StreamHandler};
 use futures::SinkExt;
@@ -27,6 +28,12 @@ impl PartialEq for Sates {
             _ => false,
         }
     }
+}
+
+#[derive(Clone, Debug)]
+pub struct DriverStatus {
+    pub last_response: Option<std::time::Instant>, // Último tiempo de respuesta
+    pub is_alive: bool, // Estado del driver
 }
 
 
@@ -55,6 +62,8 @@ pub struct Driver {
     pub ride_manager: RideManager,
     /// ID's and WriteHalf of passengers
     pub passengers_write_half: Arc<RwLock<HashMap<u16, Option<WriteHalf<TcpStream>>>>>,
+    /// Status of the drivers
+    pub drivers_status: Arc<RwLock<HashMap<u16, DriverStatus>>>,
 }
 
 impl Driver {
@@ -73,8 +82,9 @@ impl Driver {
         let mut active_drivers: HashMap<u16, (Option<ReadHalf<TcpStream>>, Option<WriteHalf<TcpStream>>)> = HashMap::new();
         let mut drivers_last_position: HashMap<u16, (i32, i32)> = HashMap::new();
         let pending_rides: Arc<RwLock<HashMap<u16, RideRequest>>> = Arc::new(RwLock::new(HashMap::new()));
-        let ride_and_offers: Arc::<RwLock<HashMap<u16, Vec<u16>>>> = Arc::new(RwLock::new(HashMap::new()));
+        let ride_and_offers: Arc<RwLock<HashMap<u16, Vec<u16>>>> = Arc::new(RwLock::new(HashMap::new()));
         let passengers_write_half: HashMap<u16, Option<WriteHalf<TcpStream>>> = HashMap::new();
+        let mut drivers_status: HashMap<u16, DriverStatus> = HashMap::new();
 
         // Payment app and connection
         let mut payment_write_half: Option<WriteHalf<TcpStream>> = None;
@@ -89,7 +99,8 @@ impl Driver {
                           &mut drivers_last_position,
                           should_be_leader,
                           &mut payment_write_half,
-                          &mut payment_read_half).await?;
+                          &mut payment_read_half,
+                          &mut drivers_status).await?;
 
         // Arcs for shared data
         let mut active_drivers_arc = Arc::new(RwLock::new(active_drivers));
@@ -98,6 +109,7 @@ impl Driver {
         let mut payment_read_half_arc = Arc::new(RwLock::new(payment_read_half));
         let mut passengers_write_half_arc = Arc::new(RwLock::new(passengers_write_half));
         let mut half_write_to_leader = Arc::new(RwLock::new(None));
+        let mut drivers_status_arc = Arc::new(RwLock::new(drivers_status));
 
         // para que funcione, no se porque
         let associate_driver_streams = Self::associate_drivers_stream;
@@ -114,6 +126,7 @@ impl Driver {
 
                 // Asociar el stream del servicio de pagos
                 associate_payment_stream(ctx, payment_read_half_arc.clone());
+
             }
             Driver {
                 id: port,
@@ -126,6 +139,7 @@ impl Driver {
                 state: Sates::Idle,
                 drivers_last_position: drivers_last_position_arc.clone(),
                 payment_write_half: payment_write_half_arc.clone(),
+                drivers_status: drivers_status_arc.clone(),
                 ride_manager: RideManager {
                     pending_rides: pending_rides.clone(),
                     unpaid_rides: unpaid_rides.clone(),
@@ -147,6 +161,56 @@ impl Driver {
         }
         Ok(())
     }
+
+    pub fn start_ping_system(&self, addr: Addr<Driver>) {
+        let drivers_status = self.drivers_status.clone();
+
+        tokio::spawn(async move {
+            loop {
+                {
+                    // TODO: CHEQUEAR QUIENES YA MUERIERON Y PONER SU ESTADO EN FALSE
+
+                    let mut drivers = drivers_status.write().unwrap();
+                    for (driver_id, status) in drivers.iter_mut() {
+                        if status.is_alive {
+                            addr.do_send(SendPingTo { id_to_send: *driver_id });
+                        }
+                    }
+                }
+                tokio::time::sleep(Duration::from_secs(5)).await; // Enviar pings cada 5 segundos
+            }
+        });
+    }
+
+    /// Handles the ping message as a driver
+    /// This is a response Ping from a driver
+    pub fn handle_ping_as_leader(&self, msg: Ping) -> Result<(), io::Error> {
+        let driver_id = msg.id_sender;
+        let mut drivers_status = self.drivers_status.write().unwrap();
+        let driver_status = drivers_status.get_mut(&driver_id).unwrap();
+        driver_status.last_response = Some(std::time::Instant::now());
+        Ok(())
+    }
+
+    pub fn handle_ping_as_driver(&mut self, msg: Ping) -> Result<(), io::Error> {
+        let response = Ping {
+            id_sender: self.id,
+            id_receiver: msg.id_sender,
+        };
+        self.send_message_to_leader(MessageType::Ping(response))?;
+        Ok(())
+    }
+
+    pub fn send_ping_to_driver(&mut self, id_driver: u16) -> Result<(), io::Error> {
+        let message = Ping {
+            id_sender: self.id,
+            id_receiver: id_driver,
+        };
+        self.send_message_to_driver(id_driver, MessageType::Ping(message))?;
+
+        Ok(())
+    }
+
 
     /// Associates the drivers streams to the driver actor, only used by the leader
     /// # Arguments
@@ -328,7 +392,7 @@ impl Driver {
         }
 
         /// Envio el mensaje al driver
-        self.send_ride_request_to_driver(driver_id_to_send, ride_request)?;
+        self.send_message_to_driver(driver_id_to_send, MessageType::RideRequest(ride_request))?;
 
         /// Agrego el id del driver al vector de ofertas
         self.ride_manager.insert_in_rides_and_offers(ride_request.id, driver_id_to_send)?;
@@ -558,6 +622,7 @@ impl Driver {
         Ok(())
     }
 
+
 /// ------------------------------------------- SENDING FUNCTIONS ---------------------------------------------- ///
 
     /// Driver's function
@@ -651,9 +716,8 @@ impl Driver {
     /// # Arguments
     /// * `driver_id` - The id of the driver
     /// * `msg` - The message containing the ride request
-    pub fn send_ride_request_to_driver(&mut self, driver_id: u16, msg: RideRequest) -> Result<(), io::Error> {
+    pub fn send_message_to_driver(&mut self, driver_id: u16, msg: MessageType) -> Result<(), io::Error> {
         let mut active_drivers_clone = Arc::clone(&self.active_drivers);
-        let msg_clone = msg.clone();
 
         actix::spawn(async move {
             let mut active_drivers = match active_drivers_clone.write() {
@@ -665,8 +729,7 @@ impl Driver {
             };
 
             if let Some((_, write_half)) = active_drivers.get_mut(&driver_id) {
-                let response = MessageType::RideRequest(msg_clone);
-                let serialized = match serde_json::to_string(&response) {
+                let serialized = match serde_json::to_string(&msg) {
                     Ok(s) => s,
                     Err(e) => {
                         eprintln!("Error serializando el mensaje: {:?}", e);

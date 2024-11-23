@@ -11,6 +11,12 @@ use crate::driver::*;
 impl Actor for Driver {
     type Context = Context<Self>;
 
+    fn started(&mut self, ctx: &mut Self::Context) {
+        if self.is_leader.read().unwrap().clone() {
+            self.start_ping_system(ctx.address());
+        }
+    }
+
     fn stopping(&mut self, _: &mut Self::Context) -> actix::Running {
         // Evita que el actor muera mientras tenga streams activos
         // TODO: puse esta condicion rando, se podria poner otra que sea mas logica
@@ -53,6 +59,9 @@ impl StreamHandler<Result<String, io::Error>> for Driver {
                     }
                     MessageType::PositionUpdate(position_update) => {
                         ctx.address().do_send(position_update);
+                    }
+                    MessageType::Ping(ping) => {
+                        ctx.address().do_send(ping);
                     }
                     _ => {
                         println!("Unknown Message");
@@ -207,6 +216,35 @@ impl Handler<NewConnection> for Driver {
             self.verify_pending_ride_request(new_passenger_id).unwrap();
         }
 
+    }
+}
+
+impl Handler<Ping> for Driver {
+    type Result = ();
+
+    fn handle(&mut self, msg: Ping, _ctx: &mut Self::Context) -> Self::Result {
+        let leader = *self.is_leader.read().unwrap();
+        if leader {
+            println!("Leader {} received a PONG from driver {}", self.id, msg.id_sender);
+            self.handle_ping_as_leader(msg).unwrap();
+        } else {
+            println!("Driver {} received a PING from driver {}", self.id, msg.id_sender);
+            self.handle_ping_as_driver(msg).unwrap();
+        }
+    }
+}
+
+
+impl Handler<SendPingTo> for Driver {
+    type Result = ();
+
+    fn handle(&mut self, msg: SendPingTo, _ctx: &mut Self::Context) -> Self::Result {
+        let leader = *self.is_leader.read().unwrap();
+        if leader {
+            self.send_ping_to_driver(msg.id_to_send).unwrap();
+        } else {
+            eprintln!("Driver {} is not the leader, cannot send ping", self.id);
+        }
     }
 }
 
