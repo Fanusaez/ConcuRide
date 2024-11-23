@@ -10,7 +10,7 @@ use tokio::io::{split, AsyncBufReadExt, BufReader, AsyncWriteExt, WriteHalf, Asy
 use tokio::net::{TcpListener, TcpStream};
 use tokio_stream::wrappers::LinesStream;
 
-use crate::init;
+use crate::{init, utils};
 use crate::models::*;
 use crate::utils::*;
 use crate::ride_manager::*;
@@ -624,7 +624,7 @@ impl Driver {
     /// Sends message to the payment app containing the ride price
     pub fn send_payment(&mut self, msg: RideRequest) -> Result<(), io::Error>{
         //TODO: Ver el tema de la cantidad pagada
-        let ride_price = msg.calculate_price();
+        let ride_price = calculate_price(msg);
         let message = SendPayment{id: msg.id, amount: ride_price};
         self.send_message_to_payment_app(MessageType::SendPayment(message))?;
         Ok(())
