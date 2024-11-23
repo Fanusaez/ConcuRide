@@ -11,12 +11,15 @@ use crate::driver::*;
 impl Actor for Driver {
     type Context = Context<Self>;
 
+    /// Called when the actor is started
+    /// Starts the ping system if the driver is the leader
     fn started(&mut self, ctx: &mut Self::Context) {
         if self.is_leader.read().unwrap().clone() {
             self.start_ping_system(ctx.address());
         }
     }
 
+    /// Prevents the actor from stopping if any stream close
     fn stopping(&mut self, _: &mut Self::Context) -> actix::Running {
         // Evita que el actor muera mientras tenga streams activos
         // TODO: puse esta condicion rando, se podria poner otra que sea mas logica
@@ -114,10 +117,15 @@ impl Handler<PaymentAccepted> for Driver {
 
 impl Handler<PaymentRejected> for Driver {
     type Result = ();
-
+    /// Only received by leader
     fn handle(&mut self, msg: PaymentRejected, ctx: &mut Self::Context) -> Self::Result {
-        println!("Leader {} received the payment rejected message for passenger with id {}", self.id, msg.id);
-        self.handle_payment_rejected_as_leader(msg).unwrap();
+        if *self.is_leader.read().unwrap() {
+            println!("Leader {} received the payment rejected message for passenger with id {}", self.id, msg.id);
+            self.handle_payment_rejected_as_leader(msg).unwrap();
+        }
+        else {
+            eprintln!("Driver {} is not the leader, should not receive this message", self.id);
+        }
     }
 
 }
@@ -126,10 +134,14 @@ impl Handler<AcceptRide> for Driver {
     type Result = ();
     /// Only received by leader
     /// Ride offered made to driver was accepted
-    /// Remove the id of the passenger from ride_and_offers and notify the passenger?
     fn handle(&mut self, msg: AcceptRide, _ctx: &mut Self::Context) -> Self::Result {
-        self.handle_accept_ride_as_leader(msg).unwrap();
-        println!("Ride with id {} was accepted by driver {}", msg.passenger_id, msg.driver_id);
+        if *self.is_leader.read().unwrap() {
+            self.handle_accept_ride_as_leader(msg).unwrap();
+            println!("Ride with id {} was accepted by driver {}", msg.passenger_id, msg.driver_id);
+        }
+        else {
+            eprintln!("Driver {} is not the leader, should not receive this message", self.id);
+        }
     }
 }
 
@@ -168,7 +180,8 @@ impl Handler<FinishRide> for Driver {
 
 impl Handler<StreamMessage> for Driver {
     type Result = ();
-
+    /// Handles the stream message, this message is received when a new stream is connected to the driver
+    /// The driver will add the stream to the list of active streams
     fn handle(&mut self, msg: StreamMessage, _ctx: &mut Self::Context) -> Self::Result {
         if let Some(read_half) = msg.stream {
             Driver::add_stream(LinesStream::new(BufReader::new(read_half).lines()), _ctx);
@@ -238,6 +251,7 @@ impl Handler<Ping> for Driver {
 }
 
 
+/// Handles the send ping to message
 impl Handler<SendPingTo> for Driver {
     type Result = ();
 
@@ -246,17 +260,21 @@ impl Handler<SendPingTo> for Driver {
         if leader {
             self.send_ping_to_driver(msg.id_to_send).unwrap();
         } else {
-            eprintln!("Driver {} is not the leader, cannot send ping", self.id);
+            eprintln!("Driver {} is not the leader, should not receive this message", self.id);
         }
     }
 }
 
 impl Handler<PositionUpdate> for Driver {
     type Result = ();
-
+    /// Handles the position update message
+    /// If the driver is the leader, will update the position of the driver
     fn handle(&mut self, msg: PositionUpdate, _ctx: &mut Self::Context) -> Self::Result {
         if *self.is_leader.read().unwrap() {
             self.handle_position_update_as_leader(msg).unwrap();
+        }
+        else {
+            eprintln!("Driver {} is not the leader, should not receive this message", self.id);
         }
     }
 }
