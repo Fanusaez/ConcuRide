@@ -156,55 +156,6 @@ impl Driver {
         Ok(())
     }
 
-    pub fn start_ping_system(&self, addr: Addr<Driver>) {
-        let drivers_status = self.drivers_status.clone();
-
-        tokio::spawn(async move {
-            loop {
-                {
-                    // TODO: CHEQUEAR QUIENES YA MUERIERON Y PONER SU ESTADO EN FALSE
-
-                    let mut drivers = drivers_status.write().unwrap();
-                    for (driver_id, status) in drivers.iter_mut() {
-                        if status.is_alive {
-                            addr.do_send(SendPingTo { id_to_send: *driver_id });
-                        }
-                    }
-                }
-                tokio::time::sleep(Duration::from_secs(5)).await; // Enviar pings cada 5 segundos
-            }
-        });
-    }
-
-    /// Handles the ping message as a driver
-    /// This is a response Ping from a driver
-    pub fn handle_ping_as_leader(&self, msg: Ping) -> Result<(), io::Error> {
-        let driver_id = msg.id_sender;
-        let mut drivers_status = self.drivers_status.write().unwrap();
-        let driver_status = drivers_status.get_mut(&driver_id).unwrap();
-        driver_status.last_response = Some(std::time::Instant::now());
-        Ok(())
-    }
-
-    pub fn handle_ping_as_driver(&mut self, msg: Ping) -> Result<(), io::Error> {
-        let response = Ping {
-            id_sender: self.id,
-            id_receiver: msg.id_sender,
-        };
-        self.send_message_to_leader(MessageType::Ping(response))?;
-        Ok(())
-    }
-
-    pub fn send_ping_to_driver(&mut self, id_driver: u16) -> Result<(), io::Error> {
-        let message = Ping {
-            id_sender: self.id,
-            id_receiver: id_driver,
-        };
-        self.send_message_to_driver(id_driver, MessageType::Ping(message))?;
-
-        Ok(())
-    }
-
 
     /// Associates the drivers streams to the driver actor, only used by the leader
     /// # Arguments
@@ -301,7 +252,77 @@ impl Driver {
         Ok(())
     }
 
-/// -------------------------------- Fin del start/inicializacion -------------------------------- ///
+/// ------------------------------------------------------------------Fin del start/inicializacion -------------------------------------------- ///
+
+
+/// ------------------------------------------------------------------ PING IMPLEMENTATION ---------------------------------------------------- ///
+
+
+    /// Starts the ping system
+    /// In a loop sends pings to the drivers
+    /// # Arguments
+    /// * `addr` - The address of the driver
+    pub fn start_ping_system(&self, addr: Addr<Driver>) {
+        let drivers_status = self.drivers_status.clone();
+
+        tokio::spawn(async move {
+            loop {
+                {
+                    // TODO: CHEQUEAR QUIENES YA MUERIERON Y PONER SU ESTADO EN FALSE
+
+                    let mut drivers = drivers_status.write().unwrap();
+                    for (driver_id, status) in drivers.iter_mut() {
+                        if status.is_alive {
+                            addr.do_send(SendPingTo { id_to_send: *driver_id });
+                        }
+                    }
+                }
+                tokio::time::sleep(Duration::from_secs(5)).await; // Enviar pings cada 5 segundos
+            }
+        });
+    }
+
+    /// Handles the ping message as a driver
+    /// This is a response Ping from a driver
+    pub fn handle_ping_as_leader(&self, msg: Ping) -> Result<(), io::Error> {
+        // id del driver que me envio el ping
+        let driver_id = msg.id_sender;
+
+        // obtengo locks
+        let mut drivers_status = self.drivers_status.write().unwrap();
+        let driver_status = drivers_status.get_mut(&driver_id).unwrap();
+
+        // actualizo el tiempo del ultimo mensaje recibido
+        driver_status.last_response = Some(std::time::Instant::now());
+
+        Ok(())
+    }
+
+    /// Handles the ping message as a driver
+    /// This is a response Ping from a driver
+    /// # Arguments
+    /// * `msg` - The message containing the ping
+    pub fn handle_ping_as_driver(&mut self, msg: Ping) -> Result<(), io::Error> {
+        let response = Ping {
+            id_sender: self.id,
+            id_receiver: msg.id_sender,
+        };
+        self.send_message_to_leader(MessageType::Ping(response))?;
+        Ok(())
+    }
+
+    /// Sends a ping to the driver with the specified id
+    pub fn send_ping_to_driver(&mut self, id_driver: u16) -> Result<(), io::Error> {
+        let message = Ping {
+            id_sender: self.id,
+            id_receiver: id_driver,
+        };
+        self.send_message_to_driver(id_driver, MessageType::Ping(message))?;
+
+        Ok(())
+    }
+
+/// ------------------------------------------------------------------ END PING IMPLEMENTATION ---------------------------------------------------- ///
 
 
     ///Handles the ride request from the leader as a driver
@@ -373,8 +394,6 @@ impl Driver {
         /// TODO: Ojo que puede devlver cero, hay que ver que hacer ahi
         let driver_id_to_send = self.get_closest_driver(ride_request);
 
-        println!("HOLAAAA");
-
         /// Si no hay drivers disponibles
         if driver_id_to_send == 0 {
             println!("No hay drivers disponibles para el pasajero con id {}, se intentara mas tarde", ride_request.id);
@@ -403,7 +422,6 @@ impl Driver {
 
         actix::spawn(async move {
 
-            println!("PAUSAMOS LA BUSQUEDA");
             // Simula espera
             tokio::time::sleep(Duration::from_secs(3)).await;
 
@@ -567,9 +585,6 @@ impl Driver {
             for i in 0..=advancement {
                 current_position.0 = (msg_clone.x_origin as f64 + x_km * i as f64) as u16;
                 current_position.1 = (msg_clone.y_origin as f64 + y_km * i as f64) as u16;
-
-                println!("Conductor {}: Actualizando posición a {:?}", driver_id, current_position);
-
 
                 let position_update = MessageType::PositionUpdate(PositionUpdate {
                     driver_id: driver_id.clone(),
