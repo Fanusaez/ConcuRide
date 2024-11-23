@@ -422,47 +422,6 @@ impl Driver {
         Ok(())
     }
 
-    /// Sends the ride request to the driver specified by the id, only used by the leader
-    /// # Arguments
-    /// * `driver_id` - The id of the driver
-    /// * `msg` - The message containing the ride request
-    pub fn send_ride_request_to_driver(&mut self, driver_id: u16, msg: RideRequest) -> Result<(), io::Error> {
-        let mut active_drivers_clone = Arc::clone(&self.active_drivers);
-        let msg_clone = msg.clone();
-
-        actix::spawn(async move {
-            let mut active_drivers = match active_drivers_clone.write() {
-                Ok(guard) => guard,
-                Err(e) => {
-                    eprintln!("Error al obtener el lock de escritura en `active_drivers`: {:?}", e);
-                    return;
-                }
-            };
-
-            if let Some((_, write_half)) = active_drivers.get_mut(&driver_id) {
-                let response = MessageType::RideRequest(msg_clone);
-                let serialized = match serde_json::to_string(&response) {
-                    Ok(s) => s,
-                    Err(e) => {
-                        eprintln!("Error serializando el mensaje: {:?}", e);
-                        return;
-                    }
-                };
-
-                if let Some(write_half) = write_half.as_mut() {
-                    if let Err(e) = write_half.write_all(format!("{}\n", serialized).as_bytes()).await {
-                        eprintln!("Error al enviar el mensaje: {:?}", e);
-                    }
-                } else {
-                    eprintln!("No se pudo enviar el mensaje: no hay conexión activa");
-                }
-            } else {
-                eprintln!("No se encontró un `write_half` para el `driver_id_to_send` especificado");
-            }
-        });
-        Ok(())
-    }
-
     /// Driver's function
     /// Sends the AcceptRide message to the leader
     /// # Arguments
@@ -504,73 +463,6 @@ impl Driver {
 
         // Enviar el mensaje de manera asíncrona
         self.send_message_to_leader(msg_type)?;
-
-        Ok(())
-    }
-
-    /// Generic function to send a message to the passenger specified by the id, only used by the leader
-    /// # Arguments
-    /// * `message` - The message to send
-    /// * `passenger_id` - The id of the passenger
-    pub fn send_message_to_passenger(
-        &self,
-        message: MessageType,
-        passenger_id: u16,
-    ) -> Result<(), io::Error> {
-        let mut passengers_write_half_clone =  self.passengers_write_half.clone();
-        let serialized = serde_json::to_string(&message)?;
-
-        actix::spawn(async move {
-            let mut passengers_half_write = match passengers_write_half_clone.write() {
-                Ok(guard) => guard,
-                Err(e) => {
-                    eprintln!("Error al obtener el lock de escritura en `active_drivers`: {:?}", e);
-                    return;
-                }
-            };
-
-            if let Some(write_half) = passengers_half_write.get_mut(&passenger_id) {
-                let serialized = match serde_json::to_string(&message) {
-                    Ok(s) => s,
-                    Err(e) => {
-                        eprintln!("Error serializando el mensaje: {:?}", e);
-                        return;
-                    }
-                };
-
-                if let Some(write_half) = write_half.as_mut() {
-                    if let Err(e) = write_half.write_all(format!("{}\n", serialized).as_bytes()).await {
-                        eprintln!("Error al enviar el mensaje: {:?}", e);
-                    }
-                } else {
-                    eprintln!("No se pudo enviar el mensaje: no hay conexión activa");
-                }
-            } else {
-                eprintln!("No se encontró un `write_half` para el `driver_id_to_send` especificado");
-            }
-        });
-        Ok(())
-    }
-
-    /// Driver's function
-    /// Sends a message to the leader
-    /// # Arguments
-    /// * `message` - The message to send
-    pub fn send_message_to_leader(&self, message: MessageType) -> Result<(), io::Error> {
-        let write_half = Arc::clone(&self.write_half_to_leader);
-        let serialized = serde_json::to_string(&message)?;
-
-        actix::spawn(async move {
-            let mut write_guard = write_half.write().unwrap();
-
-            if let Some(write_half) = write_guard.as_mut() {
-                if let Err(e) = write_half.write_all(format!("{}\n", serialized).as_bytes()).await {
-                    eprintln!("Error al enviar el mensaje: {:?}", e);
-                }
-            } else {
-                eprintln!("No se pudo enviar el mensaje: no hay conexión activa");
-            }
-        });
 
         Ok(())
     }
@@ -625,26 +517,6 @@ impl Driver {
         Ok(())
     }
 
-    /// TODO: hacer una funcion generica que reciba mensaje y canal de escritura para no repetir codigo
-    fn send_message_to_payment_app(&self, message: MessageType) -> Result<(), io::Error> {
-        let write_half = Arc::clone(&self.payment_write_half);
-        let serialized = serde_json::to_string(&message)?;
-
-        actix::spawn(async move {
-            let mut write_guard = write_half.write().unwrap();
-
-            if let Some(write_half) = write_guard.as_mut() {
-                if let Err(e) = write_half.write_all(format!("{}\n", serialized).as_bytes()).await {
-                    eprintln!("Error al enviar el mensaje: {:?}", e);
-                }
-            } else {
-                eprintln!("No se pudo enviar el mensaje: no hay conexión activa");
-            }
-        });
-
-        Ok(())
-    }
-
     /// Checks if there is a pending ride request for the passenger
     /// If there is, sends a message to the passenger to reconnect
     /// # Arguments
@@ -668,7 +540,137 @@ impl Driver {
         Ok(())
     }
 
-    /// -------------------------------------------  AUXILIARY FUNCTIONS ------------------------------------------- ///
+/// ------------------------------------------- SENDING FUNCTIONS ---------------------------------------------- ///
+
+    /// Driver's function
+    /// Sends a message to the leader
+    /// # Arguments
+    /// * `message` - The message to send
+    pub fn send_message_to_leader(&self, message: MessageType) -> Result<(), io::Error> {
+        let write_half = Arc::clone(&self.write_half_to_leader);
+        let serialized = serde_json::to_string(&message)?;
+
+        actix::spawn(async move {
+            let mut write_guard = write_half.write().unwrap();
+
+            if let Some(write_half) = write_guard.as_mut() {
+                if let Err(e) = write_half.write_all(format!("{}\n", serialized).as_bytes()).await {
+                    eprintln!("Error al enviar el mensaje: {:?}", e);
+                }
+            } else {
+                eprintln!("No se pudo enviar el mensaje: no hay conexión activa");
+            }
+        });
+
+        Ok(())
+    }
+
+    /// TODO: hacer una funcion generica que reciba mensaje y canal de escritura para no repetir codigo
+    fn send_message_to_payment_app(&self, message: MessageType) -> Result<(), io::Error> {
+        let write_half = Arc::clone(&self.payment_write_half);
+        let serialized = serde_json::to_string(&message)?;
+
+        actix::spawn(async move {
+            let mut write_guard = write_half.write().unwrap();
+
+            if let Some(write_half) = write_guard.as_mut() {
+                if let Err(e) = write_half.write_all(format!("{}\n", serialized).as_bytes()).await {
+                    eprintln!("Error al enviar el mensaje: {:?}", e);
+                }
+            } else {
+                eprintln!("No se pudo enviar el mensaje: no hay conexión activa");
+            }
+        });
+
+        Ok(())
+    }
+
+    /// Generic function to send a message to the passenger specified by the id, only used by the leader
+    /// # Arguments
+    /// * `message` - The message to send
+    /// * `passenger_id` - The id of the passenger
+    pub fn send_message_to_passenger(
+        &self,
+        message: MessageType,
+        passenger_id: u16,
+    ) -> Result<(), io::Error> {
+        let mut passengers_write_half_clone =  self.passengers_write_half.clone();
+        let serialized = serde_json::to_string(&message)?;
+
+        actix::spawn(async move {
+            let mut passengers_half_write = match passengers_write_half_clone.write() {
+                Ok(guard) => guard,
+                Err(e) => {
+                    eprintln!("Error al obtener el lock de escritura en `active_drivers`: {:?}", e);
+                    return;
+                }
+            };
+
+            if let Some(write_half) = passengers_half_write.get_mut(&passenger_id) {
+                let serialized = match serde_json::to_string(&message) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        eprintln!("Error serializando el mensaje: {:?}", e);
+                        return;
+                    }
+                };
+
+                if let Some(write_half) = write_half.as_mut() {
+                    if let Err(e) = write_half.write_all(format!("{}\n", serialized).as_bytes()).await {
+                        eprintln!("Error al enviar el mensaje: {:?}", e);
+                    }
+                } else {
+                    eprintln!("No se pudo enviar el mensaje: no hay conexión activa");
+                }
+            } else {
+                eprintln!("No se encontró un `write_half` para el `driver_id_to_send` especificado");
+            }
+        });
+        Ok(())
+    }
+
+    /// Sends the ride request to the driver specified by the id, only used by the leader
+    /// # Arguments
+    /// * `driver_id` - The id of the driver
+    /// * `msg` - The message containing the ride request
+    pub fn send_ride_request_to_driver(&mut self, driver_id: u16, msg: RideRequest) -> Result<(), io::Error> {
+        let mut active_drivers_clone = Arc::clone(&self.active_drivers);
+        let msg_clone = msg.clone();
+
+        actix::spawn(async move {
+            let mut active_drivers = match active_drivers_clone.write() {
+                Ok(guard) => guard,
+                Err(e) => {
+                    eprintln!("Error al obtener el lock de escritura en `active_drivers`: {:?}", e);
+                    return;
+                }
+            };
+
+            if let Some((_, write_half)) = active_drivers.get_mut(&driver_id) {
+                let response = MessageType::RideRequest(msg_clone);
+                let serialized = match serde_json::to_string(&response) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        eprintln!("Error serializando el mensaje: {:?}", e);
+                        return;
+                    }
+                };
+
+                if let Some(write_half) = write_half.as_mut() {
+                    if let Err(e) = write_half.write_all(format!("{}\n", serialized).as_bytes()).await {
+                        eprintln!("Error al enviar el mensaje: {:?}", e);
+                    }
+                } else {
+                    eprintln!("No se pudo enviar el mensaje: no hay conexión activa");
+                }
+            } else {
+                eprintln!("No se encontró un `write_half` para el `driver_id_to_send` especificado");
+            }
+        });
+        Ok(())
+    }
+
+/// -------------------------------------------  AUXILIARY FUNCTIONS ------------------------------------------- ///
 
 
     /// Returns the id to the closest driver to the passenger that has not been already offered the ride
