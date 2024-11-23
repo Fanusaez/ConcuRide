@@ -310,7 +310,7 @@ impl Driver {
 /// -------------------------------- Fin del start/inicializacion -------------------------------- ///
 
 
-    /// Handles the ride request from the leader as a driver
+    ///Handles the ride request from the leader as a driver
     /// # Arguments
     /// * `msg` - The message containing the ride request
     pub fn handle_ride_request_as_driver(&mut self, msg: RideRequest, addr: Addr<Self>) -> Result<(), io::Error> {
