@@ -219,7 +219,7 @@ impl Handler<PositionUpdate> for Driver {
             let mut positions = self.drivers_last_position.write().unwrap();
             positions.insert(msg.driver_id, msg.position);
 
-            // Imprimir las posiciones actualizadas.
+            println!("Líder recibió posición de conductor {}: {:?}", msg.driver_id, msg.position);
             println!("Posiciones actuales de conductores: {:?}", *positions);
         }
     }
