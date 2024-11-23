@@ -117,6 +117,5 @@ pub enum MessageType {
     Ping(Ping),
     SendPingTo(SendPingTo),
     PositionUpdate(PositionUpdate),
-
     PayRide(PayRide),
 }

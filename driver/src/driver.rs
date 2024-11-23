@@ -621,6 +621,13 @@ impl Driver {
         Ok(())
     }
 
+    /// Handles the PositionUpdate message from the driver
+    pub fn handle_position_update_as_leader(&mut self, msg: PositionUpdate) -> Result<(), io::Error> {
+        let mut positions = self.drivers_last_position.write().unwrap();
+        positions.insert(msg.driver_id, msg.position);
+        Ok(())
+    }
+
     /// Sends message to the payment app containing the ride price
     pub fn send_payment(&mut self, msg: RideRequest) -> Result<(), io::Error>{
         //TODO: Ver el tema de la cantidad pagada

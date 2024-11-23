@@ -256,12 +256,7 @@ impl Handler<PositionUpdate> for Driver {
 
     fn handle(&mut self, msg: PositionUpdate, _ctx: &mut Self::Context) -> Self::Result {
         if *self.is_leader.read().unwrap() {
-            // Actualizar la posición del conductor en `drivers_last_position`.
-            let mut positions = self.drivers_last_position.write().unwrap();
-            positions.insert(msg.driver_id, msg.position);
-
-            println!("Líder recibió posición de conductor {}: {:?}", msg.driver_id, msg.position);
-            println!("Posiciones actuales de conductores: {:?}", *positions);
+            self.handle_position_update_as_leader(msg).unwrap();
         }
     }
 }
