@@ -81,8 +81,6 @@ impl Driver {
         // Auxiliar structures
         let mut active_drivers: HashMap<u16, (Option<ReadHalf<TcpStream>>, Option<WriteHalf<TcpStream>>)> = HashMap::new();
         let mut drivers_last_position: HashMap<u16, (i32, i32)> = HashMap::new();
-        let pending_rides: Arc<RwLock<HashMap<u16, RideRequest>>> = Arc::new(RwLock::new(HashMap::new()));
-        let ride_and_offers: Arc<RwLock<HashMap<u16, Vec<u16>>>> = Arc::new(RwLock::new(HashMap::new()));
         let passengers_write_half: HashMap<u16, Option<WriteHalf<TcpStream>>> = HashMap::new();
         let mut drivers_status: HashMap<u16, DriverStatus> = HashMap::new();
 
@@ -140,11 +138,7 @@ impl Driver {
                 drivers_last_position: drivers_last_position_arc.clone(),
                 payment_write_half: payment_write_half_arc.clone(),
                 drivers_status: drivers_status_arc.clone(),
-                ride_manager: RideManager {
-                    pending_rides: pending_rides.clone(),
-                    unpaid_rides: unpaid_rides.clone(),
-                    ride_and_offers: ride_and_offers.clone(),
-                },
+                ride_manager: RideManager::new(),
 
             }
         });
@@ -364,6 +358,9 @@ impl Driver {
         /// Busco el driver mas cercano y le envio el RideRequest
         self.search_driver_and_send_ride(ride_request, addr)?;
 
+        // Inserto el id y el pago en la lista de viajes pagos
+        self.ride_manager.insert_ride_in_paid_rides(msg.id, msg);
+
         Ok(())
     }
 
@@ -468,7 +465,17 @@ impl Driver {
         // Send the FinishRide message to the passenger
         self.send_message_to_passenger(msg_message_type, msg.passenger_id)?;
 
+        // Pay ride to driver
+        let payment = self.ride_manager.get_ride_from_paid_rides(msg.passenger_id)?;
+        let pay_ride_msg = PayRide{ride_id:msg.passenger_id, amount:payment.amount};
+        self.send_payment_to_driver(msg.driver_id, pay_ride_msg)?;
+
         Ok(())
+    }
+
+    /// Sends the payment message to the driver
+    pub fn send_payment_to_driver(&mut self, driver_id: u16, msg: PayRide) -> Result<(), io::Error> {
+        self.send_message_to_driver(driver_id, MessageType::PayRide(msg))
     }
 
     /// Finish the ride, send the FinishRide message to the leader
@@ -484,6 +491,14 @@ impl Driver {
         self.send_message_to_leader(MessageType::FinishRide(msg))?;
 
         Ok(())
+    }
+
+    /// Sends the ride request to the driver specified by the id, only used by the leader
+    /// # Arguments
+    /// * `driver_id` - The id of the driver
+    /// * `msg` - The message containing the ride request
+    pub fn send_ride_request_to_driver(&mut self, driver_id: u16, msg: RideRequest) -> Result<(), io::Error> {
+        self.send_message_to_driver(driver_id, MessageType::RideRequest(msg))
     }
 
     /// Driver's function
@@ -591,13 +606,15 @@ impl Driver {
         Ok(())
     }
 
-    /// Sends message to the payment app, requesting to make a reservation for 2399
+    /// Sends message to the payment app containing the ride price
     pub fn send_payment(&mut self, msg: RideRequest) -> Result<(), io::Error>{
         //TODO: Ver el tema de la cantidad pagada
-        let message = SendPayment{id: msg.id, amount: 2399};
+        let ride_price = msg.calculate_price();
+        let message = SendPayment{id: msg.id, amount: ride_price};
         self.send_message_to_payment_app(MessageType::SendPayment(message))?;
         Ok(())
     }
+
 
     /// Checks if there is a pending ride request for the passenger
     /// If there is, sends a message to the passenger to reconnect

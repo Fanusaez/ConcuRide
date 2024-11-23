@@ -13,6 +13,9 @@ pub struct RideManager {
     pub unpaid_rides: Arc<RwLock<HashMap<u16, RideRequest>>>,
     /// Passenger last DriveRequest and the drivers who have been offered the ride
     pub ride_and_offers: Arc<RwLock<HashMap<u16, Vec<u16>>>>,
+    /// Already paid rides (ride_id, PaymentAccepted). It is used to send payment to the driver
+    /// from the leader
+    pub paid_rides: Arc<RwLock<HashMap<u16, PaymentAccepted>>>,
 }
 
 impl RideManager {
@@ -159,4 +162,31 @@ impl RideManager {
             })
     }
 
+    pub fn new() -> Self {
+        RideManager {
+            pending_rides: Arc::new(RwLock::new(HashMap::new())),
+            unpaid_rides: Arc::new(RwLock::new(HashMap::new())),
+            ride_and_offers: Arc::new(RwLock::new(HashMap::new())),
+            paid_rides: Arc::new(RwLock::new(HashMap::new())),
+        }
+    }
+
+    /// TODO: Manejar errores
+    pub fn insert_ride_in_paid_rides(&self, ride_id: u16, msg: PaymentAccepted) {
+        self.paid_rides.write().unwrap().insert(ride_id, msg);
+    }
+
+    /// Removes PaymentAccepted with the information of the payment and returns it
+    pub fn get_ride_from_paid_rides(&self, ride_id: u16) -> Result<PaymentAccepted, io::Error> {
+        let mut paid_rides = self.paid_rides.write().map_err(|e| {
+            eprintln!("Error al obtener el lock de lectura en `paid_rides`: {:?}", e);
+            io::Error::new(io::ErrorKind::Other, "Error al obtener el lock de lectura en `paid_rides`")
+        })?;
+        if let Some(payment) = paid_rides.remove(&ride_id) {
+            Ok(payment)
+        } else {
+            eprintln!("PaymentAccepted with id {} not found in paid_rides", ride_id);
+            Err(io::Error::new(io::ErrorKind::NotFound, "PaymentAccepted not found in paid_rides"))
+        }
+    }
 }

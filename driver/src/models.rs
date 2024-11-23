@@ -3,6 +3,9 @@ use serde::{Deserialize, Serialize};
 use tokio::io::{ReadHalf};
 use tokio::net::{TcpListener, TcpStream};
 
+const BASE_PRICE: u16 = 3000;
+const VARIABLE_PRICE: u16 = 50;
+
 /// RideRequest struct, ver como se puede importar desde otro archivo, esto esta en utils.rs\
 #[derive(Serialize, Deserialize, Message, Debug, Clone, Copy)]
 #[rtype(result = "()")]
@@ -39,7 +42,7 @@ pub struct FinishRide {
 #[rtype(result = "()")]
 pub struct SendPayment {
     pub id: u16,
-    pub amount: i32,
+    pub amount: u16,
 }
 
 #[derive(Serialize, Deserialize, Message, Debug, Clone, Copy)]
@@ -52,6 +55,14 @@ pub struct PaymentRejected {
 #[rtype(result = "()")]
 pub struct PaymentAccepted {
     pub id: u16,
+    pub amount: u16,
+}
+
+#[derive(Serialize, Deserialize, Message, Debug, Clone, Copy)]
+#[rtype(result = "()")]
+pub struct PayRide {
+    pub ride_id: u16,
+    pub amount: u16,
 }
 
 #[derive(Message, Debug)]
@@ -110,4 +121,14 @@ pub enum MessageType {
     SendPingTo(SendPingTo),
     PositionUpdate(PositionUpdate),
 
+    PayRide(PayRide),
+}
+
+impl RideRequest {
+    /// Calculates price based on Manhattan distance
+    pub fn calculate_price(&self) -> u16 {
+        let distance = ((self.x_dest as i32 - self.x_origin as i32).abs()
+            + (self.y_dest as i32 - self.y_origin as i32).abs()) as u16;
+        BASE_PRICE + VARIABLE_PRICE * distance
+    }
 }
