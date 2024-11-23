@@ -28,13 +28,14 @@ enum MessageType {
 #[rtype(result = "()")]
 pub struct SendPayment {
     pub id: u16,
-    pub amount: i32,
+    pub amount: u16,
 }
 
 #[derive(Serialize, Deserialize, Message, Debug, Clone, Copy)]
 #[rtype(result = "()")]
 pub struct PaymentAccepted {
     pub id: u16,
+    pub amount: u16,
 }
 
 #[derive(Serialize, Deserialize, Message, Debug, Clone, Copy)]
@@ -161,7 +162,7 @@ impl Handler<PaymentRejected> for SocketWriter {
 ///  ----------------------------------    Payment App   ----------------------------------  ///
 
 pub struct PaymentApp {
-    rides_and_payments: HashMap<u16,i32>, //id, amount
+    rides_and_payments: HashMap<u16,u16>, //id, amount
     writer: Addr<SocketWriter>,
 }
 
@@ -175,7 +176,7 @@ impl Handler<SendPayment> for PaymentApp {
     /// Procesa el mensaje 'SendPayment' y envía al wirter si fue aceptado o no
     fn handle(&mut self, msg: SendPayment, _: &mut Self::Context) {
         if self.payment_is_accepted() {
-            let payment_accepted = PaymentAccepted{id: msg.id};
+            let payment_accepted = PaymentAccepted{id: msg.id, amount: msg.amount};
             println!("Pago accepted");
             self.rides_and_payments.insert(msg.id, msg.amount); //Lo agrego a los viajes aceptados
             self.writer.do_send(payment_accepted);

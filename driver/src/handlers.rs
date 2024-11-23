@@ -63,6 +63,9 @@ impl StreamHandler<Result<String, io::Error>> for Driver {
                     MessageType::Ping(ping) => {
                         ctx.address().do_send(ping);
                     }
+                    MessageType::PayRide(pay_ride) => {
+                        ctx.address().do_send(pay_ride);
+                    }
                     _ => {
                         println!("Unknown Message");
                     }
@@ -260,5 +263,13 @@ impl Handler<PositionUpdate> for Driver {
             println!("Líder recibió posición de conductor {}: {:?}", msg.driver_id, msg.position);
             println!("Posiciones actuales de conductores: {:?}", *positions);
         }
+    }
+}
+
+
+impl Handler<PayRide> for Driver {
+    type Result = ();
+    fn handle(&mut self, msg: PayRide, ctx: &mut Self::Context) -> Self::Result {
+        println!("Dinero ingresado: {}, del viaje {}", msg.amount, msg.ride_id);
     }
 }
