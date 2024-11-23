@@ -476,6 +476,7 @@ impl Driver {
         let msg_clone = ride_request_msg.clone();
         let driver_id = self.id.clone();
         let duration = calculate_travel_duration(&msg_clone);
+        let write_half = Arc::clone(&self.write_half_to_leader);
         let position = self.position;
 
         actix::spawn(async move {
@@ -484,17 +485,34 @@ impl Driver {
             let x_km = (msg_clone.x_dest as i32 - msg_clone.x_origin as i32) as f64 / advancement as f64;
             let y_km = (msg_clone.y_dest as i32 - msg_clone.y_origin as i32) as f64 / advancement as f64;
 
-            for i in 0..advancement {
+            for i in 0..=advancement {
                 current_position.0 = (msg_clone.x_origin as f64 + x_km * i as f64) as u16;
                 current_position.1 = (msg_clone.y_origin as f64 + y_km * i as f64) as u16;
 
                 println!("Conductor {}: Actualizando posición a {:?}", driver_id, current_position);
 
-                // Simula espera
-                tokio::time::sleep(Duration::from_secs(duration / advancement as u64)).await;
+
+                let position_update = MessageType::PositionUpdate(PositionUpdate {
+                    driver_id: driver_id.clone(),
+                    position: (current_position.0 as i32, current_position.1 as i32),
+                });
+
+                let write_half_clone = Arc::clone(&write_half);
+                let serialized = serde_json::to_string(&position_update).unwrap();
+                if let Some(mut write_half) = write_half_clone.write().unwrap().as_mut() {
+                    if let Err(e) = write_half
+                        .write_all(format!("{}\n", serialized).as_bytes())
+                        .await
+                    {
+                        eprintln!("Error al enviar actualizacion de posición: {:?}", e);
+                    }
+                } else {
+                    eprintln!("No hay conexion activa para enviar la posición.");
+                }
+
+                actix_rt::time::sleep(Duration::from_secs((duration / advancement as u64) as u64)).await;
             }
 
-            // Enviar mensaje al actor para finalizar el viaje
             let finish_ride = FinishRide {
                 passenger_id: ride_request_msg.id,
                 driver_id,

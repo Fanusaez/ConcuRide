@@ -74,6 +74,13 @@ pub struct RideRequestReconnection {
     pub state: String,
 }
 
+#[derive(Serialize, Deserialize, Message, Debug, Clone, Copy)]
+#[rtype(result = "()")]
+pub struct PositionUpdate {
+    pub driver_id: u16,
+    pub position: (i32, i32),
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(tag = "message_type")]
 /// enum Message used to deserialize
@@ -87,4 +94,5 @@ pub enum MessageType {
     PaymentRejected(PaymentRejected),
     NewConnection(NewConnection),
     RideRequestReconnection(RideRequestReconnection),
+    PositionUpdate(PositionUpdate),
 }

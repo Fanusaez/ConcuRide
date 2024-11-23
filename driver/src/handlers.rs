@@ -51,6 +51,9 @@ impl StreamHandler<Result<String, io::Error>> for Driver {
                     MessageType::NewConnection(new_connection) => {
                         ctx.address().do_send(new_connection);
                     }
+                    MessageType::PositionUpdate(position_update) => {
+                        ctx.address().do_send(position_update);
+                    }
                     _ => {
                         println!("Unknown Message");
                     }
@@ -204,5 +207,20 @@ impl Handler<NewConnection> for Driver {
             self.verify_pending_ride_request(new_passenger_id).unwrap();
         }
 
+    }
+}
+
+impl Handler<PositionUpdate> for Driver {
+    type Result = ();
+
+    fn handle(&mut self, msg: PositionUpdate, _ctx: &mut Self::Context) -> Self::Result {
+        if *self.is_leader.read().unwrap() {
+            // Actualizar la posición del conductor en `drivers_last_position`.
+            let mut positions = self.drivers_last_position.write().unwrap();
+            positions.insert(msg.driver_id, msg.position);
+
+            // Imprimir las posiciones actualizadas.
+            println!("Posiciones actuales de conductores: {:?}", *positions);
+        }
     }
 }
