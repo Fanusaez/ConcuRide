@@ -351,7 +351,6 @@ impl Driver {
         let result = boolean_with_probability(probability);
 
         if result && self.state == Sates::Idle {
-            sleep(Duration::from_secs(5));
             println!("Driver {} accepted the ride request", self.id);
             self.accept_ride_request(msg)?;
             self.drive_and_finish(msg, addr)?;
