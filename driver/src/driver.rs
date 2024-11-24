@@ -38,6 +38,7 @@ pub struct DriverStatus {
 
 
 const LIDER_PORT_IDX : usize = 0;
+const PING_INTERVAL: u64 = 5;
 
 pub struct Driver {
     /// The port of the driver
@@ -52,6 +53,8 @@ pub struct Driver {
     pub write_half_to_leader: Arc<RwLock<Option<WriteHalf<TcpStream>>>>,
     /// The connections to the drivers
     pub active_drivers: Arc<RwLock<HashMap<u16, (Option<ReadHalf<TcpStream>>, Option<WriteHalf<TcpStream>>)>>>,
+    /// ID's of Dead Drivers
+    pub dead_drivers: Arc<RwLock<Vec<u16>>>,
     /// States of the driver
     pub state: Sates,
     /// Last known position of the driver (port, (x, y))
@@ -80,6 +83,7 @@ impl Driver {
 
         // Auxiliar structures
         let mut active_drivers: HashMap<u16, (Option<ReadHalf<TcpStream>>, Option<WriteHalf<TcpStream>>)> = HashMap::new();
+        let dead_drivers: Arc<RwLock<Vec<u16>>> = Arc::new(RwLock::new(Vec::new()));
         let mut drivers_last_position: HashMap<u16, (i32, i32)> = HashMap::new();
         let passengers_write_half: HashMap<u16, Option<WriteHalf<TcpStream>>> = HashMap::new();
         let mut drivers_status: HashMap<u16, DriverStatus> = HashMap::new();
@@ -132,6 +136,7 @@ impl Driver {
                 is_leader: is_leader.clone(),
                 leader_port: leader_port.clone(),
                 active_drivers: active_drivers_arc.clone(),
+                dead_drivers,
                 write_half_to_leader: half_write_to_leader.clone(),
                 passengers_write_half: passengers_write_half_arc.clone(),
                 state: Sates::Idle,
@@ -263,34 +268,42 @@ impl Driver {
     /// # Arguments
     /// * `addr` - The address of the driver
     pub fn start_ping_system(&self, addr: Addr<Driver>) {
-        let drivers_status = self.drivers_status.clone();
+        let mut drivers_status = self.drivers_status.clone();
+        let mut active_drivers = self.active_drivers.clone();
+        let mut dead_drivers = self.dead_drivers.clone();
 
         tokio::spawn(async move {
             loop {
                 {
-                    // TODO: CHEQUEAR QUIENES YA MUERIERON Y PONER SU ESTADO EN FALSE
-
                     let mut drivers = drivers_status.write().unwrap();
                     for (driver_id, status) in drivers.iter_mut() {
                         if status.is_alive {
                             addr.do_send(SendPingTo { id_to_send: *driver_id });
+                            update_driver_status(status, &mut active_drivers, &mut dead_drivers, *driver_id);
                         }
                     }
                 }
-                tokio::time::sleep(Duration::from_secs(5)).await; // Enviar pings cada 5 segundos
+                tokio::time::sleep(Duration::from_secs(PING_INTERVAL)).await; // Enviar pings cada 5 segundos
             }
         });
     }
 
     /// Handles the ping message as a driver
-    /// This is a response Ping from a driver
+    /// This is a response Ping from a driver (PONG)
     pub fn handle_ping_as_leader(&self, msg: Ping) -> Result<(), io::Error> {
         // id del driver que me envio el ping
         let driver_id = msg.id_sender;
 
         // obtengo locks
         let mut drivers_status = self.drivers_status.write().unwrap();
-        let driver_status = drivers_status.get_mut(&driver_id).unwrap();
+
+        let driver_status = match drivers_status.get_mut(&driver_id) {
+            Some(status) => status,
+            None => {
+                eprintln!("Error: No se encontró el estado del driver con id {}", driver_id);
+                return Ok(());
+            }
+        };
 
         // actualizo el tiempo del ultimo mensaje recibido
         driver_status.last_response = Some(std::time::Instant::now());
@@ -307,6 +320,7 @@ impl Driver {
             id_sender: self.id,
             id_receiver: msg.id_sender,
         };
+        // Resend ping (PONG)
         self.send_message_to_leader(MessageType::Ping(response))?;
         Ok(())
     }
@@ -827,4 +841,30 @@ impl Driver {
         closest_driver
     }
 
+}
+
+/// Check if the driver is alive, if the driver does not respond in 5 seconds, it is considered dead
+/// If dead, remove the driver from the active drivers and add it to the dead drivers
+/// # Arguments
+/// * `status` - The status of the driver
+/// * `active_drivers` - The active drivers
+/// * `dead_drivers` - The dead drivers
+/// * `driver_id` - The id of the driver
+/// TODO: sacar el driver de drivers_status?
+pub fn update_driver_status(status: &mut DriverStatus,
+                            active_drivers: &mut Arc<RwLock<HashMap<u16, (Option<ReadHalf<TcpStream>>, Option<WriteHalf<TcpStream>>)>>>,
+                            dead_drivers: &mut Arc<RwLock<Vec<u16>>>,
+                            driver_id: u16) {
+    // tomo el tiempo actual
+    let time_now = std::time::Instant::now();
+
+    if let Some(last_response) = status.last_response {
+        // considero muerto si no responde en 5 segundos
+        if time_now.duration_since(last_response).as_secs() > PING_INTERVAL {
+            status.is_alive = false;
+            active_drivers.write().unwrap().remove(&driver_id);
+            dead_drivers.write().unwrap().push(driver_id);
+            println!("Driver {} is dead", driver_id);
+        }
+    }
 }
