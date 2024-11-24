@@ -5,6 +5,7 @@ use std::sync::{Arc, RwLock};
 use std::thread::sleep;
 use std::time::Duration;
 use actix::{Actor, Addr, AsyncContext, StreamHandler};
+use actix::clock::Sleep;
 use futures::SinkExt;
 use tokio::io::{split, AsyncBufReadExt, BufReader, AsyncWriteExt, WriteHalf, AsyncReadExt, ReadHalf};
 use tokio::net::{TcpListener, TcpStream};
@@ -269,8 +270,6 @@ impl Driver {
     /// * `addr` - The address of the driver
     pub fn start_ping_system(&self, addr: Addr<Driver>) {
         let mut drivers_status = self.drivers_status.clone();
-        let mut active_drivers = self.active_drivers.clone();
-        let mut dead_drivers = self.dead_drivers.clone();
 
         tokio::spawn(async move {
             loop {
@@ -279,7 +278,12 @@ impl Driver {
                     for (driver_id, status) in drivers.iter_mut() {
                         if status.is_alive {
                             addr.do_send(SendPingTo { id_to_send: *driver_id });
-                            update_driver_status(status, &mut active_drivers, &mut dead_drivers, *driver_id);
+
+                            // si esta muerto, me automando un mesnaje
+                            if !update_driver_status(status, *driver_id) {
+                                println!("Driver {} is dead", driver_id);
+                                addr.do_send(DeadDriver { driver_id: *driver_id });
+                            }
                         }
                     }
                 }
@@ -347,6 +351,7 @@ impl Driver {
         let result = boolean_with_probability(probability);
 
         if result && self.state == Sates::Idle {
+            sleep(Duration::from_secs(5));
             println!("Driver {} accepted the ride request", self.id);
             self.accept_ride_request(msg)?;
             self.drive_and_finish(msg, addr)?;
@@ -413,10 +418,10 @@ impl Driver {
             println!("No hay drivers disponibles para el pasajero con id {}, se intentara mas tarde", ride_request.id);
 
             // Elimino todas las ofertas que se hicieron
-            self.ride_manager.remove_from_ride_and_offers(ride_request.id)?;
+            self.ride_manager.remove_offers_from_ride_and_offers(ride_request.id)?;
 
             // Pauso y reinicio la busqueda de drivers
-            self.pause_and_restart_driver_search(ride_request,addr)?;
+            self.pause_and_restart_driver_search(ride_request, addr)?;
 
             return Ok(());
         }
@@ -522,6 +527,35 @@ impl Driver {
         // Enviar el mensaje de finalización al líder
         self.send_message_to_leader(MessageType::FinishRide(msg))?;
 
+        Ok(())
+    }
+
+    /// Handles the dead driver message from the leader
+    /// Removes the driver from the active drivers and adds it to the dead drivers
+    /// In case the dead driver was offered a ride and not responded, sends auto decline message, so the RideRequest can be sent to another driver
+    pub fn handle_dead_driver_as_leader(&mut self, addr: Addr<Self>, msg: DeadDriver) -> Result<(), io::Error> {
+        let mut active_drivers = self.active_drivers.write().unwrap();
+        let mut dead_drivers = self.dead_drivers.write().unwrap();
+        let mut ride_and_offers = self.ride_manager.ride_and_offers.write().unwrap();
+        let mut last_positions = self.drivers_last_position.write().unwrap();
+
+        let dead_driver_id = msg.driver_id;
+
+        active_drivers.remove(&dead_driver_id);
+        dead_drivers.push(dead_driver_id);
+        last_positions.remove(&dead_driver_id);
+
+        // verificar si en ride and offers se encuentra el driver en ultima posicion de un viaje
+        for (passenger_id, drivers_id) in ride_and_offers.iter_mut() {
+            if let Some(last_driver) = drivers_id.last() {
+                // si el ultimo id al que se le ofrecio el viaje es el driver muerto
+                // finjo una respuesta del driver muerto
+                // Sino creo que tengo problemas con los locks y addr
+                if *last_driver == dead_driver_id {
+                    addr.do_send(DeclineRide { passenger_id: *passenger_id, driver_id: dead_driver_id });
+                }
+            }
+        }
         Ok(())
     }
 
@@ -850,21 +884,20 @@ impl Driver {
 /// * `active_drivers` - The active drivers
 /// * `dead_drivers` - The dead drivers
 /// * `driver_id` - The id of the driver
+/// # Returns
+/// True if the driver is alive, false otherwise
 /// TODO: sacar el driver de drivers_status?
 pub fn update_driver_status(status: &mut DriverStatus,
-                            active_drivers: &mut Arc<RwLock<HashMap<u16, (Option<ReadHalf<TcpStream>>, Option<WriteHalf<TcpStream>>)>>>,
-                            dead_drivers: &mut Arc<RwLock<Vec<u16>>>,
-                            driver_id: u16) {
+                            driver_id: u16) -> bool {
     // tomo el tiempo actual
     let time_now = std::time::Instant::now();
-
+    let mut is_alive = true;
     if let Some(last_response) = status.last_response {
         // considero muerto si no responde en 5 segundos
         if time_now.duration_since(last_response).as_secs() > PING_INTERVAL {
             status.is_alive = false;
-            active_drivers.write().unwrap().remove(&driver_id);
-            dead_drivers.write().unwrap().push(driver_id);
-            println!("Driver {} is dead", driver_id);
+            is_alive = false;
         }
     }
+    is_alive
 }

@@ -286,3 +286,17 @@ impl Handler<PayRide> for Driver {
         println!("Dinero ingresado: {}, del viaje {}", msg.amount, msg.ride_id);
     }
 }
+
+impl Handler<DeadDriver> for Driver {
+    type Result = ();
+
+    fn handle(&mut self, msg: DeadDriver, ctx: &mut Self::Context) -> Self::Result {
+        if *self.is_leader.read().unwrap() {
+            println!("Leader {} received the dead driver message for driver with id {}", self.id, msg.driver_id);
+            self.handle_dead_driver_as_leader(ctx.address(), msg).unwrap();
+        }
+        else {
+            eprintln!("Driver {} is not the leader, should not receive this message", self.id);
+        }
+    }
+}
