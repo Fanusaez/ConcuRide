@@ -40,6 +40,7 @@ pub struct DriverStatus {
 
 const LIDER_PORT_IDX : usize = 0;
 const PING_INTERVAL: u64 = 5;
+const RESTART_DRIVER_SEARCH_INTERVAL: u64 = 5;
 
 pub struct Driver {
     /// The port of the driver
@@ -416,7 +417,7 @@ impl Driver {
         if driver_id_to_send == 0 {
             println!("No hay drivers disponibles para el pasajero con id {}, se intentara mas tarde", ride_request.id);
 
-            // Elimino todas las ofertas que se hicieron
+            // Elimino todas las ofertas que se hicieron (pero no el id del pasajero)
             self.ride_manager.remove_offers_from_ride_and_offers(ride_request.id)?;
 
             // Pauso y reinicio la busqueda de drivers
@@ -441,12 +442,10 @@ impl Driver {
         actix::spawn(async move {
 
             // Simula espera
-            tokio::time::sleep(Duration::from_secs(3)).await;
+            tokio::time::sleep(Duration::from_secs(RESTART_DRIVER_SEARCH_INTERVAL)).await;
 
-            // TODO: Crear un nuevo mensaje para este proposito
-            let response = DeclineRide {
+            let response = RestartDriverSearch {
                 passenger_id: ride_request_clone.id,
-                driver_id: 0,
             };
 
             addr.do_send(response);
@@ -480,6 +479,18 @@ impl Driver {
     /// # Arguments
     /// * `msg` - The message containing the Declined Ride
     pub fn handle_declined_ride_as_leader(&mut self, msg: DeclineRide, addr: Addr<Self>) -> Result<(), io::Error> {
+        let ride_request = self.ride_manager.get_pending_ride_request(msg.passenger_id)?;
+
+        // vuelvo a buscar el driver mas cercano
+        self.search_driver_and_send_ride(ride_request, addr)?;
+
+        Ok(())
+    }
+
+    /// Handles the RestartDriverSearch message
+    /// # Arguments
+    /// * `msg` - The message containing the RestartDriverSearch
+    pub fn handle_restart_driver_search_as_leader(&mut self, msg: RestartDriverSearch, addr: Addr<Self>) -> Result<(), io::Error> {
         let ride_request = self.ride_manager.get_pending_ride_request(msg.passenger_id)?;
 
         // vuelvo a buscar el driver mas cercano

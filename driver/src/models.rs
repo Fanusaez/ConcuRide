@@ -107,6 +107,12 @@ pub struct DeadDriver {
     pub driver_id: u16,
 }
 
+#[derive(Serialize, Deserialize, Message, Debug, Clone, Copy)]
+#[rtype(result = "()")]
+pub struct RestartDriverSearch {
+    pub passenger_id: u16,
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(tag = "message_type")]
 /// enum Message used to deserialize

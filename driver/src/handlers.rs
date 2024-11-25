@@ -178,6 +178,20 @@ impl Handler<FinishRide> for Driver {
     }
 }
 
+impl Handler<RestartDriverSearch> for Driver {
+    type Result = ();
+
+    /// Handles the restart driver search message
+    fn handle(&mut self, msg: RestartDriverSearch, ctx: &mut Self::Context) -> Self::Result {
+        let is_leader = *self.is_leader.read().unwrap();
+        if is_leader {
+            self.handle_restart_driver_search_as_leader(msg, ctx.address()).unwrap();
+        } else {
+            eprintln!("Driver {} is not the leader, should not receive this message", self.id);
+        }
+    }
+}
+
 impl Handler<StreamMessage> for Driver {
     type Result = ();
     /// Handles the stream message, this message is received when a new stream is connected to the driver
@@ -241,10 +255,8 @@ impl Handler<Ping> for Driver {
     fn handle(&mut self, msg: Ping, _ctx: &mut Self::Context) -> Self::Result {
         let leader = *self.is_leader.read().unwrap();
         if leader {
-            println!("Leader {} received a PONG from driver {}", self.id, msg.id_sender);
             self.handle_ping_as_leader(msg).unwrap();
         } else {
-            println!("Driver {} received a PING from driver {}", self.id, msg.id_sender);
             self.handle_ping_as_driver(msg).unwrap();
         }
     }
