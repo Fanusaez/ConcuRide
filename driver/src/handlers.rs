@@ -1,7 +1,9 @@
+use std::fmt::format;
 use std::io;
 use std::io::Error;
 use tokio::io::{split, AsyncBufReadExt, BufReader, AsyncWriteExt, WriteHalf, AsyncReadExt, ReadHalf};
 use actix::{Actor, AsyncContext, Context, Handler, StreamHandler};
+use colored::Colorize;
 use tokio_stream::wrappers::LinesStream;
 
 use crate::driver::Driver;
@@ -51,7 +53,6 @@ impl StreamHandler<Result<String, io::Error>> for Driver {
                         ctx.address().do_send(finish_ride);
                     }
                     MessageType::PaymentAccepted(payment_accepted) => {
-                        println!("Payment accepted msg received");
                         ctx.address().do_send(payment_accepted);
                     }
                     MessageType::PaymentRejected(payment_rejected) => {
@@ -95,6 +96,7 @@ impl Handler<RideRequest> for Driver {
         let is_leader = *self.is_leader.read().unwrap();
 
         if is_leader {
+            log_hito_driver(&format!("LEADER RECEIVED RIDE REQUEST FROM PASSENGER {}", msg.id), "DRIVE");
             self.handle_ride_request_as_leader(msg).expect("Error handling ride request as leader");
         } else {
             self.handle_ride_request_as_driver(msg, ctx.address()).expect("Error handling ride request as driver");
@@ -106,12 +108,15 @@ impl Handler<RideRequest> for Driver {
 impl Handler<PaymentAccepted> for Driver {
     type Result = ();
 
-    /// Only receved by leader
+    /// Only received by leader
     /// Handles the payment accepted message
     fn handle(&mut self, msg: PaymentAccepted, ctx: &mut Self::Context) -> Self::Result {
-
-        println!("Leader {} received the payment accepted message for passenger with id {}", self.id, msg.id);
-        self.handle_payment_accepted_as_leader(msg, ctx.address()).unwrap();
+        if *self.is_leader.read().unwrap() {
+            self.handle_payment_accepted_as_leader(msg, ctx.address()).unwrap();
+        }
+        else {
+            eprintln!("Driver {} is not the leader, should not receive this message", self.id);
+        }
     }
 }
 
@@ -137,7 +142,7 @@ impl Handler<AcceptRide> for Driver {
     fn handle(&mut self, msg: AcceptRide, _ctx: &mut Self::Context) -> Self::Result {
         if *self.is_leader.read().unwrap() {
             self.handle_accept_ride_as_leader(msg).unwrap();
-            println!("Ride with id {} was accepted by driver {}", msg.passenger_id, msg.driver_id);
+            log_hito_driver(&format!("RIDE REQUEST {} WAS ACCEPTED BY DRIVER {}", msg.passenger_id, msg.driver_id ,), "DRIVE");
         }
         else {
             eprintln!("Driver {} is not the leader, should not receive this message", self.id);
@@ -149,14 +154,17 @@ impl Handler<DeclineRide> for Driver {
     type Result = ();
     /// Only received by leader
     /// Ride offered made to driver was declined
-    /// TODO: OFFER THE RIDE TO ANOTHER DRIVER
     fn handle(&mut self, msg: DeclineRide, ctx: &mut Self::Context) -> Self::Result {
-        println!("Lider {} received the declined message for the ride request from driver {}", self.id, msg.driver_id);
-        match self.handle_declined_ride_as_leader(msg, ctx.address()) {
-            Ok(_) => {}
-            Err(e) => {
-                eprintln!("Error handling declined ride as leader: {:?}", e);
+        if *self.is_leader.read().unwrap() {
+            log_hito_driver(&format!("RIDE REQUEST {} WAS DECLINED BY DRIVER {}", msg.passenger_id, msg.driver_id, ), "DRIVE");
+            match self.handle_declined_ride_as_leader(msg, ctx.address()) {
+                Ok(_) => {}
+                Err(e) => {
+                    eprintln!("Error handling declined ride as leader: {:?}", e);
+                }
             }
+        } else {
+            eprintln!("Driver {} is not the leader, should not receive this message", self.id);
         }
     }
 }
@@ -169,7 +177,7 @@ impl Handler<FinishRide> for Driver {
     fn handle(&mut self, msg: FinishRide, _ctx: &mut Self::Context) -> Self::Result {
         let is_leader = *self.is_leader.read().unwrap();
         if is_leader {
-            println!("Passenger with id {} has been dropped off by driver with id {} ", msg.passenger_id, msg.driver_id);
+            log_hito_driver(&format!("RIDE REQUEST {} WAS FINISHED BY DRIVER {}", msg.passenger_id, msg.driver_id, ), "DRIVE");
             self.handle_finish_ride_as_leader(msg).unwrap();
         } else {
             // driver send FinishRide to the leader and change state to Idle
@@ -304,11 +312,19 @@ impl Handler<DeadDriver> for Driver {
 
     fn handle(&mut self, msg: DeadDriver, ctx: &mut Self::Context) -> Self::Result {
         if *self.is_leader.read().unwrap() {
-            println!("Leader {} received the dead driver message for driver with id {}", self.id, msg.driver_id);
+            log_hito_fall(&format!("DRIVER {} IS DEAD", msg.driver_id), "DRIVE");
             self.handle_dead_driver_as_leader(ctx.address(), msg).unwrap();
         }
         else {
             eprintln!("Driver {} is not the leader, should not receive this message", self.id);
         }
     }
+}
+
+fn log_hito_driver(message: &str, type_msg: &str) {
+    println!("[HITO-{}] - {}", type_msg, message.blue().bold());
+}
+
+fn log_hito_fall(message: &str, type_msg: &str) {
+    println!("[HITO-{}] - {}", type_msg, message.red().bold());
 }
