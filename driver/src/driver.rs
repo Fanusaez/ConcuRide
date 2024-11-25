@@ -42,6 +42,8 @@ pub struct DriverStatus {
 const LIDER_PORT_IDX : usize = 0;
 const PING_INTERVAL: u64 = 5;
 const RESTART_DRIVER_SEARCH_INTERVAL: u64 = 5;
+const PROBABILITY_OF_ACCEPTING_RIDE: f64 = 0.99;
+const NO_DRIVER_AVAILABLE: u16 = 0;
 
 pub struct Driver {
     /// The port of the driver
@@ -349,16 +351,15 @@ impl Driver {
     /// # Arguments
     /// * `msg` - The message containing the ride request
     pub fn handle_ride_request_as_driver(&mut self, msg: RideRequest, addr: Addr<Self>) -> Result<(), io::Error> {
-        let probability = 0.99;
-        let result = boolean_with_probability(probability);
+        let result = boolean_with_probability(PROBABILITY_OF_ACCEPTING_RIDE);
 
         if result && self.state == Sates::Idle {
-            println!("Driver {} accepted the ride request", self.id);
+            log(&format!("RIDE REQUEST {} ACCEPTED", msg.id), "DRIVER");
             self.accept_ride_request(msg)?;
             self.drive_and_finish(msg, addr)?;
         } else {
+            log(&format!("RIDE REQUEST {} REJECTED", msg.id), "DRIVER");
             self.decline_ride_request(msg)?;
-            println!("Driver {} rejected the ride request", self.id);
         }
         Ok(())
 
@@ -400,7 +401,7 @@ impl Driver {
         self.search_driver_and_send_ride(ride_request, addr)?;
 
         // Inserto el id y el pago en la lista de viajes pagos
-        self.ride_manager.insert_ride_in_paid_rides(msg.id, msg);
+        self.ride_manager.insert_ride_in_paid_rides(msg.id, msg)?;
 
         Ok(())
     }
@@ -415,8 +416,8 @@ impl Driver {
         let driver_id_to_send = self.get_closest_driver(ride_request);
 
         /// Si no hay drivers disponibles
-        if driver_id_to_send == 0 {
-            println!("No hay drivers disponibles para el pasajero con id {}, se intentara mas tarde", ride_request.id);
+        if driver_id_to_send == NO_DRIVER_AVAILABLE {
+            log(&format!("NO DRIVERS AVAILABLE RIGHT NOW FOR PASSENGER {}, TRYING AGAIN LATER", ride_request.id), "INFO");
 
             // Elimino todas las ofertas que se hicieron (pero no el id del pasajero)
             self.ride_manager.remove_offers_from_ride_and_offers(ride_request.id)?;
@@ -530,7 +531,7 @@ impl Driver {
     /// # Arguments
     /// * `msg` - The message containing the ride request
     pub fn handle_finish_ride_as_driver(&mut self, msg: FinishRide) -> Result<(), io::Error> {
-        println!("Driver is now im position: {:?}", self.position);
+        log(&format!("RIDE FINISHED, PASSENGER WITH ID {} HAS BEEN DROPPED OFF", msg.passenger_id), "DRIVER");
 
         // Cambiar el estado del driver a Idle
         self.state = Sates::Idle;
@@ -633,7 +634,6 @@ impl Driver {
         let driver_id = self.id.clone();
         let duration = calculate_travel_duration(&msg_clone);
         let write_half = Arc::clone(&self.write_half_to_leader);
-        let position = self.position;
 
         actix::spawn(async move {
             let mut current_position = (msg_clone.x_origin, msg_clone.y_origin);
@@ -689,7 +689,6 @@ impl Driver {
 
     /// Sends message to the payment app containing the ride price
     pub fn send_payment(&mut self, msg: RideRequest) -> Result<(), io::Error>{
-        //TODO: Ver el tema de la cantidad pagada
         let ride_price = calculate_price(msg);
         let message = SendPayment{id: msg.id, amount: ride_price};
         self.send_message_to_payment_app(MessageType::SendPayment(message))?;

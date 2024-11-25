@@ -1,3 +1,4 @@
+use colored::Colorize;
 use rand::Rng;
 use crate::models::RideRequest;
 
@@ -20,4 +21,14 @@ pub fn calculate_price(ride_request: RideRequest) -> u16 {
     let distance = ((ride_request.x_dest as i32 - ride_request.x_origin as i32).abs()
         + (ride_request.y_dest as i32 - ride_request.y_origin as i32).abs()) as u16;
     BASE_PRICE + VARIABLE_PRICE * distance
+}
+
+/// TODO: CONSIDERAR PASAR A UN ARCHIVO DE LOGS Y MODULARIZAR
+pub fn log(message: &str, type_msg: &str) {
+    match type_msg {
+        "DRIVER" => println!("[{}] - {}", type_msg, message.blue().bold()),
+        "INFO" => println!("[{}] - {}", type_msg, message.cyan().bold()),
+        "DISC" => println!("[{}] - {}", type_msg, message.red().bold()),
+        _ => println!("[{}] - {}", type_msg, message.green().bold()),
+    }
 }
