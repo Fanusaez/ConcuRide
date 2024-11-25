@@ -96,6 +96,7 @@ impl Handler<RideRequest> for Driver {
         let is_leader = *self.is_leader.read().unwrap();
 
         if is_leader {
+            // todo: ojo, si el pasajero se reconcto no deberia imprimirse esto, en handle_ride_request_as_leader se maneja y hay otro TODO
             log(&format!("LEADER RECEIVED RIDE REQUEST FROM PASSENGER {}", msg.id), "DRIVER");
             self.handle_ride_request_as_leader(msg).expect("Error handling ride request as leader");
         } else {
@@ -233,14 +234,18 @@ impl Handler<NewConnection> for Driver {
 
         // en caso de reconexion, borrar la conexion anterior
         if previous_connection {
+            log(&format!("RE-CONNECTED WITH PASSENGER {}", new_passenger_id), "INFO");
             match passengers_write_half.remove(&new_passenger_id) {
                 Some(_write_half) => {
-                    eprintln!("Se eliminó la conexión anterior con el pasajero {}", new_passenger_id);
+                    //eprintln!("Se eliminó la conexión anterior con el pasajero {}", new_passenger_id);
                 }
                 None => {
                     eprintln!("No se encontró la conexión anterior con el pasajero {}", new_passenger_id);
                 }
             }
+        }
+        else {
+            log(&format!("NEW CONNECTION WITH PASSENGER {}", new_passenger_id), "NEW_CONNECTION");
         }
 
         // Reemplazar la clave
@@ -318,7 +323,7 @@ impl Handler<DeadDriver> for Driver {
 
     fn handle(&mut self, msg: DeadDriver, ctx: &mut Self::Context) -> Self::Result {
         if *self.is_leader.read().unwrap() {
-            log(&format!("DRIVER {} IS DEAD", msg.driver_id), "DISC");
+            log(&format!("DRIVER {} IS DEAD", msg.driver_id), "DISCONNECTION");
             self.handle_dead_driver_as_leader(ctx.address(), msg).unwrap();
         }
         else {

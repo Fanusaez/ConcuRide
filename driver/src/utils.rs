@@ -28,7 +28,8 @@ pub fn log(message: &str, type_msg: &str) {
     match type_msg {
         "DRIVER" => println!("[{}] - {}", type_msg, message.blue().bold()),
         "INFO" => println!("[{}] - {}", type_msg, message.cyan().bold()),
-        "DISC" => println!("[{}] - {}", type_msg, message.red().bold()),
+        "DISCONNECTION" => println!("[{}] - {}", type_msg, message.red().bold()), // disc = disconnection
+        "NEW_CONNECTION" => println!("[{}] - {}", type_msg, message.green().bold()), // nc = no connection
         _ => println!("[{}] - {}", type_msg, message.green().bold()),
     }
 }

@@ -154,7 +154,6 @@ impl Driver {
         });
 
         let listener = TcpListener::bind(format!("127.0.0.1:{}", port)).await?;
-        println!("WAITING FOR PASSENGERS TO CONNECT (leader) OR ACCEPTING LEADER (drivers)\n");
 
         while let Ok((stream, addr)) = listener.accept().await {
             if should_be_leader {
@@ -411,8 +410,6 @@ impl Driver {
     /// # Arguments
     /// * `ride_request` - The ride request to send
     fn search_driver_and_send_ride(&mut self, ride_request: RideRequest, addr: Addr<Self>) -> Result<(), io::Error> {
-        /// Logica de a quien se le manda el mensaje
-        /// TODO: Ojo que puede devlver cero, hay que ver que hacer ahi
         let driver_id_to_send = self.get_closest_driver(ride_request);
 
         /// Si no hay drivers disponibles
