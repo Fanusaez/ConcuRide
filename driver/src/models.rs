@@ -101,6 +101,18 @@ pub struct PositionUpdate {
     pub position: (i32, i32),
 }
 
+#[derive(Serialize, Deserialize, Message, Debug, Clone, Copy)]
+#[rtype(result = "()")]
+pub struct DeadDriver {
+    pub driver_id: u16,
+}
+
+#[derive(Serialize, Deserialize, Message, Debug, Clone, Copy)]
+#[rtype(result = "()")]
+pub struct RestartDriverSearch {
+    pub passenger_id: u16,
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(tag = "message_type")]
 /// enum Message used to deserialize
@@ -118,4 +130,5 @@ pub enum MessageType {
     SendPingTo(SendPingTo),
     PositionUpdate(PositionUpdate),
     PayRide(PayRide),
+    DeadDriver(DeadDriver),
 }

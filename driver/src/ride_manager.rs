@@ -93,6 +93,7 @@ impl RideManager {
         Ok(())
     }
 
+    /// Removes the passenger id from the ride_and_offers hashmap
     pub fn remove_from_ride_and_offers(&self, passenger_id: u16) -> Result<(), io::Error> {
         let mut ride_and_offers = self.ride_and_offers.write();
         match ride_and_offers {
@@ -113,6 +114,23 @@ impl RideManager {
                     io::ErrorKind::Other,
                     "Error obtaining writing lock from `ride_and_offers`",
                 ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Removes all the offers from the ride_and_offers hashmap to the passenger_id
+    pub fn remove_offers_from_ride_and_offers(&self, passenger_id: u16) -> Result<(), io::Error> {
+        let mut ride_and_offers = self.ride_and_offers.write();
+        match ride_and_offers {
+            Ok(mut ride_and_offers) => {
+                if let Some(offers) = ride_and_offers.get_mut(&passenger_id) {
+                    offers.clear();
+                }
+            },
+            Err(e) => {
+                eprintln!("Error al obtener el lock de escritura en `ride_and_offers`: {:?}", e);
+                return Err(io::Error::new(io::ErrorKind::Other, "Error al obtener el lock de escritura en `ride_and_offers`"));
             }
         }
         Ok(())
