@@ -39,6 +39,9 @@ impl RideManager {
         Ok(())
     }
 
+    /// Removes ride from pending rides
+    /// # Arguments
+    /// * `passenger_id` - The id of the passenger
     pub fn remove_ride_from_pending(&self, passenger_id: u16) -> Result<(), io::Error> {
         let mut pending_rides = self.pending_rides.write();
         match pending_rides {
@@ -129,8 +132,8 @@ impl RideManager {
                 }
             },
             Err(e) => {
-                eprintln!("Error al obtener el lock de escritura en `ride_and_offers`: {:?}", e);
-                return Err(io::Error::new(io::ErrorKind::Other, "Error al obtener el lock de escritura en `ride_and_offers`"));
+                eprintln!("Error obtaining writing lock from `ride_and_offers`: {:?}", e);
+                return Err(io::Error::new(io::ErrorKind::Other, "Error obtaining writing lock from `ride_and_offers`"));
             }
         }
         Ok(())
@@ -156,6 +159,7 @@ impl RideManager {
         Ok(())
     }
 
+    /// Removes unpaid ride from the hashmap
     pub fn remove_unpaid_ride(&self, passenger_id: u16) -> Result<RideRequest, io::Error> {
         let mut unpaid_rides = self.unpaid_rides.write().map_err(|e| {
             eprintln!("Error obtaining writing lock from `unpaid_rides`: {:?}", e);
@@ -303,6 +307,7 @@ mod tests {
         {
             let pending_rides = ride_manager.pending_rides.read().unwrap();
             assert!(pending_rides.contains_key(&ride_request.id));
+            assert_eq!(pending_rides.get(&ride_request.id).unwrap().id, 1);
         }
 
         // Remove ride
