@@ -277,3 +277,111 @@ impl RideManager {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+    use models::RideRequest;
+    use crate::models;
+
+
+    #[test]
+    fn test_insert_and_remove_pending_ride() {
+        let ride_manager = RideManager::new();
+
+        let ride_request = RideRequest {
+            id: 1,
+            x_origin: 25,
+            y_origin: 12,
+            x_dest: 16,
+            y_dest: 15,
+        };
+
+        // Insert ride
+        assert!(ride_manager.insert_ride_in_pending(ride_request.clone()).is_ok());
+        {
+            let pending_rides = ride_manager.pending_rides.read().unwrap();
+            assert!(pending_rides.contains_key(&ride_request.id));
+        }
+
+        // Remove ride
+        assert!(ride_manager.remove_ride_from_pending(ride_request.id).is_ok());
+        {
+            let pending_rides = ride_manager.pending_rides.read().unwrap();
+            assert!(!pending_rides.contains_key(&ride_request.id));
+        }
+    }
+
+    #[test]
+    fn test_insert_and_clear_rides_and_offers() {
+        let ride_manager = RideManager::new();
+
+        let passenger_id = 1;
+        let driver_id = 101;
+        let driver_id2 = 102;
+
+        // Insert ride and offer
+        assert!(ride_manager.insert_in_rides_and_offers(passenger_id, driver_id).is_ok());
+        assert!(ride_manager.insert_in_rides_and_offers(passenger_id, driver_id2).is_ok());
+        {
+            let ride_and_offers = ride_manager.ride_and_offers.read().unwrap();
+            assert!(ride_and_offers.contains_key(&passenger_id));
+            assert_eq!(ride_and_offers[&passenger_id], vec![driver_id, driver_id2]);
+        }
+
+        // Clear offers
+        assert!(ride_manager.remove_offers_from_ride_and_offers(passenger_id).is_ok());
+        {
+            let ride_and_offers = ride_manager.ride_and_offers.read().unwrap();
+            assert!(ride_and_offers.contains_key(&passenger_id));
+            assert!(ride_and_offers[&passenger_id].is_empty());
+        }
+    }
+
+    #[test]
+    fn test_insert_and_remove_unpaid_ride() {
+        let ride_manager = RideManager::new();
+
+        let ride_request = RideRequest {
+            id: 1,
+            x_origin: 25,
+            y_origin: 12,
+            x_dest: 16,
+            y_dest: 15,
+        };
+
+        // Insert unpaid ride
+        assert!(ride_manager.insert_unpaid_ride(ride_request.clone()).is_ok());
+        {
+            let unpaid_rides = ride_manager.unpaid_rides.read().unwrap();
+            assert!(unpaid_rides.contains_key(&ride_request.id));
+        }
+
+        // Remove unpaid ride
+        let removed_ride = ride_manager.remove_unpaid_ride(ride_request.id).unwrap();
+        assert_eq!(removed_ride.id, ride_request.id);
+        {
+            let unpaid_rides = ride_manager.unpaid_rides.read().unwrap();
+            assert!(!unpaid_rides.contains_key(&ride_request.id));
+        }
+    }
+
+    #[test]
+    fn test_get_pending_ride_request() {
+        let ride_manager = RideManager::new();
+
+        let ride_request = RideRequest {
+            id: 1,
+            x_origin: 25,
+            y_origin: 12,
+            x_dest: 16,
+            y_dest: 15,
+        };
+
+        assert!(ride_manager.insert_ride_in_pending(ride_request.clone()).is_ok());
+
+        let fetched_ride = ride_manager.get_pending_ride_request(ride_request.id).unwrap();
+        assert_eq!(fetched_ride.id, ride_request.id);
+    }
+}
