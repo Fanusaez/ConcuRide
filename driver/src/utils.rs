@@ -1,3 +1,4 @@
+use colored::Colorize;
 use std::fs::File;
 use rand::Rng;
 use crate::models::RideRequest;
@@ -40,4 +41,14 @@ pub fn read_config_file(path: &str) -> Result<Vec<u16>, io::Error> {
         }
     }
     Ok(drivers_ports)
+}
+
+/// TODO: CONSIDERAR PASAR A UN ARCHIVO DE LOGS Y MODULARIZAR
+pub fn log(message: &str, type_msg: &str) {
+    match type_msg {
+        "DRIVER" => println!("[{}] - {}", type_msg, message.blue().bold()),
+        "INFO" => println!("[{}] - {}", type_msg, message.cyan().bold()),
+        "DISC" => println!("[{}] - {}", type_msg, message.red().bold()),
+        _ => println!("[{}] - {}", type_msg, message.green().bold()),
+    }
 }
