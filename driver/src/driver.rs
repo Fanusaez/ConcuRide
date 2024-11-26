@@ -1,16 +1,14 @@
 use std::cmp::PartialEq;
 use std::collections::HashMap;
-use std::{io, thread};
+use std::{io};
 use std::sync::{Arc, RwLock};
-use std::thread::sleep;
 use std::time::Duration;
 use actix::{Actor, Addr, AsyncContext, StreamHandler};
 use actix::clock::Sleep;
-use futures::SinkExt;
 use tokio::io::{split, AsyncBufReadExt, BufReader, AsyncWriteExt, WriteHalf, AsyncReadExt, ReadHalf};
 use tokio::net::{TcpListener, TcpStream};
+use std::net::{SocketAddr, UdpSocket};
 use tokio_stream::wrappers::LinesStream;
-use colored::*;
 
 use crate::{init, utils};
 use crate::models::*;
@@ -44,6 +42,7 @@ const PING_INTERVAL: u64 = 5;
 const RESTART_DRIVER_SEARCH_INTERVAL: u64 = 5;
 const PROBABILITY_OF_ACCEPTING_RIDE: f64 = 0.99;
 const NO_DRIVER_AVAILABLE: u16 = 0;
+const PING_TIMEOUT: u64 = 7;
 
 pub struct Driver {
     /// The port of the driver
@@ -56,6 +55,8 @@ pub struct Driver {
     pub leader_port: Arc<RwLock<u16>>,
     /// write half
     pub write_half_to_leader: Arc<RwLock<Option<WriteHalf<TcpStream>>>>,
+    /// Liders last ping
+    pub last_ping_by_leader: Arc<RwLock<std::time::Instant>>,
     /// The connections to the drivers
     pub active_drivers: Arc<RwLock<HashMap<u16, (Option<ReadHalf<TcpStream>>, Option<WriteHalf<TcpStream>>)>>>,
     /// ID's of Dead Drivers
@@ -85,6 +86,7 @@ impl Driver {
         let should_be_leader = port == drivers_ports[LIDER_PORT_IDX];
         let is_leader = Arc::new(RwLock::new(should_be_leader));
         let leader_port = Arc::new(RwLock::new(drivers_ports[LIDER_PORT_IDX].clone()));
+        let last_ping_by_leader = std::time::Instant::now();
 
         // Auxiliar structures
         let mut active_drivers: HashMap<u16, (Option<ReadHalf<TcpStream>>, Option<WriteHalf<TcpStream>>)> = HashMap::new();
@@ -117,6 +119,7 @@ impl Driver {
         let mut passengers_write_half_arc = Arc::new(RwLock::new(passengers_write_half));
         let mut half_write_to_leader = Arc::new(RwLock::new(None));
         let mut drivers_status_arc = Arc::new(RwLock::new(drivers_status));
+        let last_ping_by_leader = Arc::new(RwLock::new(last_ping_by_leader));
 
         // para que funcione, no se porque
         let associate_driver_streams = Self::associate_drivers_stream;
@@ -140,6 +143,7 @@ impl Driver {
                 position, // Arrancan en el origen por comodidad, ver despues que onda
                 is_leader: is_leader.clone(),
                 leader_port: leader_port.clone(),
+                last_ping_by_leader,
                 active_drivers: active_drivers_arc.clone(),
                 dead_drivers,
                 write_half_to_leader: half_write_to_leader.clone(),
@@ -327,6 +331,10 @@ impl Driver {
             id_sender: self.id,
             id_receiver: msg.id_sender,
         };
+        // Update last ping time of leader
+        let mut last_ping = self.last_ping_by_leader.write().unwrap();
+        *last_ping = std::time::Instant::now();
+
         // Resend ping (PONG)
         self.send_message_to_leader(MessageType::Ping(response))?;
         Ok(())
@@ -343,7 +351,40 @@ impl Driver {
         Ok(())
     }
 
-/// ------------------------------------------------------------------ END PING IMPLEMENTATION ---------------------------------------------------- ///
+    pub fn check_leader_alive(&mut self, addr: Addr<Driver>) {
+        let last_ping_by_leader = self.last_ping_by_leader.clone();
+        let leader_id = {
+            let guard = self.leader_port.read().unwrap();
+            *guard
+        };
+
+        actix::spawn(async move {
+            loop {
+                let last_ping = {
+                    let guard = last_ping_by_leader.read().unwrap();
+                    *guard
+                };
+
+                let now = std::time::Instant::now();
+                let elapsed = now.duration_since(last_ping).as_secs();
+
+                if elapsed > PING_TIMEOUT {
+                    addr.do_send(DeadLeader { leader_id });
+                    break;
+                }
+
+                tokio::time::sleep(Duration::from_secs(PING_INTERVAL)).await;
+            }
+        });
+    }
+
+
+    /// ------------------------------------------------------------------ END PING IMPLEMENTATION ---------------------------------------------------- ///
+
+    /// Handles the dead leader message as a driver
+    /// Si estoy aca es porque me di cuenta que el lider murio
+    /// TODO: PROBLEMA: PUEDE QUE OTRO DRIVER TODAVIA NO SE HAYA DADO CUENTA QUE EL LIDER SE CAYO, Y SI ENVIO EL MENSAJE NADIE VA A LEER.
+
 
 
     ///Handles the ride request from the leader as a driver
@@ -907,4 +948,12 @@ pub fn update_driver_status(status: &mut DriverStatus,
         }
     }
     is_alive
+}
+
+fn next_port(id: u16) -> u16 {
+    if id == 10001 {
+        10002
+    } else {
+        10001
+    }
 }
