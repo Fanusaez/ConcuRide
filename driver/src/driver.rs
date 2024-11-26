@@ -385,7 +385,92 @@ impl Driver {
     /// Si estoy aca es porque me di cuenta que el lider murio
     /// TODO: PROBLEMA: PUEDE QUE OTRO DRIVER TODAVIA NO SE HAYA DADO CUENTA QUE EL LIDER SE CAYO, Y SI ENVIO EL MENSAJE NADIE VA A LEER.
 
+    pub fn handle_dead_leader_as_driver(&mut self, addr: Addr<Driver>) -> Result<(), io::Error> {
+        let port = self.id + 4000; // Puerto actual del driver
+        let id = self.id;
 
+        actix::spawn(async move {
+            let socket = match UdpSocket::bind(format!("127.0.0.1:{}", port)) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("Error al bindear socket en puerto {}: {}", port, e);
+                    return;
+                }
+            };
+
+            tokio::time::sleep(Duration::from_secs(2)).await; // Provisorio para evitar colisiones iniciales
+
+            let initial_msg = RingMessage::Election { participants: vec![id] };
+            let mut buf = [0u8; 1024];
+
+            // Enviar el mensaje inicial
+            let next_port = next_port(port);
+            let target_address = format!("127.0.0.1:{}", next_port);
+            if let Err(e) = socket.send_to(&serde_json::to_vec(&initial_msg).unwrap(), &target_address) {
+                eprintln!("Error al enviar mensaje inicial: {}", e);
+                return;
+            }
+
+            loop {
+                let (len, addr) = match socket.recv_from(&mut buf) {
+                    Ok(res) => res,
+                    Err(e) => {
+                        eprintln!("Error al recibir mensaje: {}", e);
+                        continue;
+                    }
+                };
+
+                let message: RingMessage = match serde_json::from_slice(&buf[..len]) {
+                    Ok(msg) => msg,
+                    Err(e) => {
+                        eprintln!("Error al deserializar mensaje: {}", e);
+                        continue;
+                    }
+                };
+
+                match message {
+                    RingMessage::Election { mut participants } => {
+                        println!("{} recibió mensaje de elección", id);
+                        if participants.contains(&id) {
+                            let leader_id = *participants.iter().max().unwrap();
+                            let msg_to_send = RingMessage::Coordinator {
+                                leader_id,
+                                id_origin: id,
+                            };
+                            let serialized_message = serde_json::to_vec(&msg_to_send).unwrap();
+                            if let Err(e) = socket.send_to(&serialized_message, addr) {
+                                eprintln!("Error al enviar mensaje de coordinador: {}", e);
+                            }
+                        } else {
+                            participants.push(id);
+                            let msg_to_send = RingMessage::Election { participants };
+                            let serialized_message = serde_json::to_vec(&msg_to_send).unwrap();
+                            let next_address = format!("127.0.0.1:{}", next_port);
+                            if let Err(e) = socket.send_to(&serialized_message, &next_address) {
+                                eprintln!("Error al reenviar mensaje de elección: {}", e);
+                            }
+                        }
+                    }
+                    RingMessage::Coordinator { leader_id, id_origin } => {
+                        if id == id_origin {
+                            //addr.do_send(NewLeader { leader_id });
+                            break;
+                        } else {
+                            let msg_to_send = RingMessage::Coordinator { leader_id, id_origin };
+                            let serialized_message = serde_json::to_vec(&msg_to_send).unwrap();
+                            let next_address = format!("127.0.0.1:{}", next_port);
+                            if let Err(e) = socket.send_to(&serialized_message, &next_address) {
+                                eprintln!("Error al reenviar mensaje de coordinador: {}", e);
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        });
+
+        Ok(())
+    }
 
     ///Handles the ride request from the leader as a driver
     /// # Arguments
