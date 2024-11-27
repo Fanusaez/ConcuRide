@@ -74,7 +74,9 @@ pub struct Driver {
     /// Status of the drivers
     pub drivers_status: Arc<RwLock<HashMap<u16, DriverStatus>>>,
     /// UDP Socket for leader election
-    pub socket: Arc<UdpSocket>
+    pub socket: Arc<UdpSocket>,
+    /// Driver's IDS
+    pub drivers_id: Vec<u16>
 }
 
 impl Driver {
@@ -110,6 +112,8 @@ impl Driver {
 
         // Remove the leader port from the list of drivers
         drivers_ports.remove(LIDER_PORT_IDX);
+
+        let drivers_id = drivers_ports.clone();
 
         init::init_driver(&mut active_drivers, drivers_ports,
                           &mut drivers_last_position,
@@ -161,6 +165,7 @@ impl Driver {
                 drivers_status: drivers_status_arc.clone(),
                 ride_manager: RideManager::new(),
                 socket: Arc::new(socket),
+                drivers_id,
 
             }
         });
@@ -932,8 +937,8 @@ impl Driver {
     pub fn handle_dead_leader_as_driver(&mut self, addr: Addr<Driver>) -> Result<(), io::Error> {
 
         let id = self.id;
-        let port = self.id + 4000; // Puerto actual del driver
         let socket = self.socket.clone();
+        let drivers_id = self.drivers_id.clone();
 
         let stop = Arc::new((Mutex::new(false), Condvar::new()));
         let stop_clone = stop.clone();
@@ -945,7 +950,7 @@ impl Driver {
         let thread_leader_id = leader_id.clone();
 
         thread::spawn(move || {
-            Self::receive(id, port, socket, stop_clone, got_ack, leader_id);
+            Self::receive(id, socket, stop_clone, got_ack, leader_id, drivers_id);
         });
 
         // Esperar a que se elija un nuevo líder
@@ -971,24 +976,25 @@ impl Driver {
         Ok(())
     }
 
-     fn receive(     id: u16,
-                     port: u16,
-                     socket: Arc<UdpSocket>,
-                     stop: Arc<(Mutex<bool>, Condvar)>,
-                     got_ack: Arc<(Mutex<Option<u16>>, Condvar)>,
-                     leader_id_cond: Arc<(Mutex<Option<u16>>, Condvar)>) {
+     fn receive(id: u16,
+                socket: Arc<UdpSocket>,
+                stop: Arc<(Mutex<bool>, Condvar)>,
+                got_ack: Arc<(Mutex<Option<u16>>, Condvar)>,
+                leader_id_cond: Arc<(Mutex<Option<u16>>, Condvar)>,
+                drivers_id: Vec<u16>) {
 
         //tokio::time::sleep(Duration::from_secs(2)); // Provisorio para evitar colisiones iniciales
         let initial_msg = RingMessage::Election { participants: vec![id] };
 
 
         // clono y envio mensaje inicial
-        let socket_clone = socket.clone();
-        let id_clone = id.clone();
-        let got_ack_clone = got_ack.clone();
-        let msg = serde_json::to_vec(&initial_msg).unwrap();
+         let socket_clone = socket.clone();
+         let id_clone = id.clone();
+         let got_ack_clone = got_ack.clone();
+         let msg = serde_json::to_vec(&initial_msg).unwrap();
+         let drivers_id_clone = drivers_id.clone();
         thread::spawn(move || {
-            Self::safe_send_next(socket_clone, msg, id_clone, got_ack_clone);
+            Self::safe_send_next(socket_clone, msg, id_clone, got_ack_clone, drivers_id_clone);
         });
 
         let mut buf = [0u8; 1024];
@@ -1036,8 +1042,9 @@ impl Driver {
                         let id_clone = id.clone();
                         let got_ack_clone = got_ack.clone();
                         let msg = serde_json::to_vec(&msg_to_send).unwrap();
+                        let drivers_id_clone = drivers_id.clone();
                         thread::spawn(move || {
-                            Self::safe_send_next(socket_clone, msg, id_clone, got_ack_clone);
+                            Self::safe_send_next(socket_clone, msg, id_clone, got_ack_clone, drivers_id_clone);
                         });
 
                     } else {
@@ -1050,8 +1057,9 @@ impl Driver {
                         let id_clone = id.clone();
                         let got_ack_clone = got_ack.clone();
                         let msg = serde_json::to_vec(&msg_to_send).unwrap();
+                        let drivers_id_clone= drivers_id.clone();
                         thread::spawn(move || {
-                            Self::safe_send_next(socket_clone, msg, id_clone, got_ack_clone);
+                            Self::safe_send_next(socket_clone, msg, id_clone, got_ack_clone, drivers_id_clone);
                         });
                     }
                 }
@@ -1075,8 +1083,9 @@ impl Driver {
                         let socket_clone = socket.clone();
                         let id_clone = id.clone();
                         let got_ack_clone = got_ack.clone();
+                        let drivers_id_clone = drivers_id.clone();
                         thread::spawn(move || {
-                            Self::safe_send_next(socket_clone, serialized_message, id_clone, got_ack_clone);
+                            Self::safe_send_next(socket_clone, serialized_message, id_clone, got_ack_clone, drivers_id_clone);
                         });
                     }
                 }
@@ -1090,6 +1099,7 @@ impl Driver {
         msg: Vec<u8>,
         current_id: u16,
         got_ack: Arc<(Mutex<Option<u16>>, Condvar)>, // Para manejar el ACK
+        drivers_id: Vec<u16>,
     ) {
 
         let mut next_id = current_id + 1; // Lógica para determinar el siguiente nodo
@@ -1098,10 +1108,12 @@ impl Driver {
             panic!("Di toda la vuelta sin respuestas");
         }
 
-        if next_id == 6003 {
-            next_id = 6001;
+        // si se paso, que vuelva al primero
+        if next_id == drivers_id.last().unwrap() + 1 {
+            next_id = *drivers_id.first().unwrap();
         }
 
+        // 4000 para que sean 10001, 10002 etc
         let target_address = format!("127.0.0.1:{}", next_id + 4000);
 
         // Enviar el mensaje
@@ -1122,7 +1134,7 @@ impl Driver {
         if result.1.timed_out() {
             // Si se agotó el tiempo, reintentar con el siguiente
             println!("[{}] Timeout esperando ACK de {}", current_id, next_id);
-            Self::safe_send_next(socket, msg, next_id, got_ack.clone());
+            Self::safe_send_next(socket, msg, next_id, got_ack.clone(), drivers_id);
         } else {
             //println!("[{}] ACK recibido de {}", current_id, next_id);
         }
