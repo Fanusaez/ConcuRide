@@ -1,6 +1,6 @@
 use std::cmp::PartialEq;
 use std::collections::HashMap;
-use std::{io};
+use std::{io, thread};
 use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::time::Duration;
 use actix::{Actor, Addr, AsyncContext, StreamHandler};
@@ -939,42 +939,36 @@ impl Driver {
         let leader_id =  Arc::new((Mutex::new(Some(id)), Condvar::new()));
 
         actix::spawn(async move {
-            Self::receive(id, port, socket, stop, got_ack, leader_id);
+            Self::receive(id, port, socket, stop, got_ack, leader_id).await;
         });
 
         Ok(())
     }
 
-    fn receive(id: u16,
-               port: u16,
-               socket: Arc<UdpSocket>,
-               stop: Arc<(Mutex<bool>, Condvar)>,
-               got_ack: Arc<(Mutex<Option<u16>>, Condvar)>,
-               leader_id: Arc<(Mutex<Option<u16>>, Condvar)>) {
+    async fn receive(id: u16,
+                     port: u16,
+                     socket: Arc<UdpSocket>,
+                     stop: Arc<(Mutex<bool>, Condvar)>,
+                     got_ack: Arc<(Mutex<Option<u16>>, Condvar)>,
+                     leader_id_cond: Arc<(Mutex<Option<u16>>, Condvar)>) {
 
-        tokio::time::sleep(Duration::from_secs(2)); // Provisorio para evitar colisiones iniciales
+        //tokio::time::sleep(Duration::from_secs(2)); // Provisorio para evitar colisiones iniciales
         let initial_msg = RingMessage::Election { participants: vec![id] };
-        let mut buf = [0u8; 1024];
+
 
         // clono y envio mensaje inicial
         let socket_clone = socket.clone();
         let id_clone = id.clone();
         let got_ack_clone = got_ack.clone();
         let msg = serde_json::to_vec(&initial_msg).unwrap();
-        actix::spawn(async move {
+        thread::spawn(move || {
             Self::safe_send_next(socket_clone, msg, id_clone, got_ack_clone);
         });
 
-        let next_port = next_port(port);
-        let target_address = format!("127.0.0.1:{}", next_port);
-        if let Err(e) = socket.send_to(&serde_json::to_vec(&initial_msg).unwrap(), &target_address) {
-            eprintln!("Error al enviar mensaje inicial: {}", e);
-            return;
-        }
-
+        let mut buf = [0u8; 1024];
         loop {
             let (len, addr) = match socket.recv_from(&mut buf) {
-                Ok(res) => res,
+                Ok(result) => result,
                 Err(e) => {
                     eprintln!("Error al recibir mensaje: {}", e);
                     continue;
@@ -984,7 +978,7 @@ impl Driver {
             let message: RingMessage = match serde_json::from_slice(&buf[..len]) {
                 Ok(msg) => msg,
                 Err(e) => {
-                    eprintln!("Error al deserializar mensaje: {}", e);
+                    eprintln!("Error al deserializar el mensaje: {}", e);
                     continue;
                 }
             };
@@ -999,7 +993,7 @@ impl Driver {
                 }
                 RingMessage::Election { mut participants } => {
                     println!("{} recibió mensaje de elección", id);
-                    // TODO: enviar ack
+                    // Envio ACK
                     let ack_msg = RingMessage::ACK { id_origin: id };
                     let serialized_ack = serde_json::to_vec(&ack_msg).unwrap();
                     if let Err(e) = socket.send_to(&serialized_ack, addr) {
@@ -1014,36 +1008,48 @@ impl Driver {
                             id_origin: id,
                         };
                         let serialized_message = serde_json::to_vec(&msg_to_send).unwrap();
-                        // TODO: en vez de target address, aca se vuelve para atras y se envia a quien me envio el mensaje, no se sigue el anillo
+                        // envio para atras el mensaje de coordinador
                         if let Err(e) = socket.send_to(&serialized_message, addr) {
                             eprintln!("Error al enviar mensaje de coordinador: {}", e);
                         }
+
                     } else {
                         participants.push(id);
                         let msg_to_send = RingMessage::Election { participants };
-                        let serialized_message = serde_json::to_vec(&msg_to_send).unwrap();
-                        let next_address = format!("127.0.0.1:{}", next_port);
-                        if let Err(e) = socket.send_to(&serialized_message, &next_address) {
-                            eprintln!("Error al reenviar mensaje de elección: {}", e);
-                        }
+
+                        // clono y envio mensaje
+                        let socket_clone = socket.clone();
+                        let id_clone = id.clone();
+                        let got_ack_clone = got_ack.clone();
+                        let msg = serde_json::to_vec(&msg_to_send).unwrap();
+                        thread::spawn(move || {
+                            Self::safe_send_next(socket_clone, msg, id_clone, got_ack_clone);
+                        });
                     }
                 }
+                // Mensaje de coordinador: id_origen es el que primero crea el mensaje de coordinador
                 RingMessage::Coordinator { leader_id, id_origin } => {
                     println!("{} El nuevo lider es", leader_id);
-                    // TODO: enviar ack
-                    if id == id_origin {
-                        // dio la vuelta el mensaje coordinator
-                        // TODO: deberia enviarme un mensaje a mi mismo asignando un nuevo lider con addr.do_send(NewLeader{leader_id})
-                        //addr.do_send(NewLeader { leader_id });
-                        break;
-                    } else {
+
+                    *leader_id_cond.0.lock().unwrap() = Some(leader_id);
+                    leader_id_cond.1.notify_all();
+                    // Envio ACK
+                    let ack_msg = RingMessage::ACK { id_origin: id };
+                    let serialized_ack = serde_json::to_vec(&ack_msg).unwrap();
+                    if let Err(e) = socket.send_to(&serialized_ack, addr) {
+                        eprintln!("Error al enviar mensaje de ack: {}", e);
+                    }
+                    if id != id_origin {
                         // sigo el anillo
                         let msg_to_send = RingMessage::Coordinator { leader_id, id_origin };
                         let serialized_message = serde_json::to_vec(&msg_to_send).unwrap();
-                        let next_address = format!("127.0.0.1:{}", next_port);
-                        if let Err(e) = socket.send_to(&serialized_message, &next_address) {
-                            eprintln!("Error al reenviar mensaje de coordinador: {}", e);
-                        }
+                        let socket_clone = socket.clone();
+                        let id_clone = id.clone();
+                        let got_ack_clone = got_ack.clone();
+                        let msg = serde_json::to_vec(&serialized_message).unwrap();
+                        thread::spawn(move || {
+                            Self::safe_send_next(socket_clone, msg, id_clone, got_ack_clone);
+                        });
                     }
                 }
             }
@@ -1057,10 +1063,15 @@ impl Driver {
         current_id: u16,
         got_ack: Arc<(Mutex<Option<u16>>, Condvar)>, // Para manejar el ACK
     ) {
-        let next_id = current_id + 1; // Lógica para determinar el siguiente nodo
+        println!("HOLA ENTRE");
+        let mut next_id = current_id + 1; // Lógica para determinar el siguiente nodo
         if next_id == current_id {
             println!("[{}] Enviando {} a {}", current_id, msg[0] as char, next_id);
             panic!("Di toda la vuelta sin respuestas");
+        }
+
+        if next_id == 6003 {
+            next_id = 6001;
         }
 
         let target_address = format!("127.0.0.1:{}", next_id + 4000);
