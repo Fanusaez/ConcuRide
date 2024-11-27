@@ -962,8 +962,7 @@ impl Driver {
             }
 
             if let Some(new_leader) = *leader_guard {
-                //addr.do_send(NewLeader { leader_id: new_leader });
-                println!("Nuevo líder elegido: {}", new_leader);
+                addr.do_send(NewLeader { leader_id: new_leader });
 
                 // Detener la ejecución del proceso de elección
                 let (stop_lock, stop_cvar) = &*thread_stop;

@@ -344,3 +344,20 @@ impl Handler<DeadLeader> for Driver {
         }
     }
 }
+
+impl Handler<NewLeader> for Driver {
+    type Result = ();
+
+    fn handle(&mut self, msg: NewLeader, ctx: &mut Self::Context) -> Self::Result {
+        if *self.is_leader.read().unwrap() {
+            eprintln!("Leader should not receive NewLeader message");
+        }
+        else if msg.leader_id == self.id {
+            log(&format!("I AM THE NEW LEADER {}", msg.leader_id), "NEW_CONNECTION");
+            //self.handle_new_leader_as_driver(msg, ctx.address()).unwrap();
+        }
+        else {
+            log(&format!("NEW LEADER APPOINTED {}", msg.leader_id), "NEW_CONNECTION");
+        }
+    }
+}
