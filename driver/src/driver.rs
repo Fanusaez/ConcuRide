@@ -930,6 +930,9 @@ impl Driver {
         closest_driver
     }
 
+
+/// ---------------------------------------------------------- LEADER ELECTION IMPLEMENTATION ---------------------------------------------------- ///
+
     /// Handles the dead leader message as a driver
     /// Si estoy aca es porque me di cuenta que el lider murio
     /// TODO: PROBLEMA: PUEDE QUE OTRO DRIVER TODAVIA NO SE HAYA DADO CUENTA QUE EL LIDER SE CAYO, Y SI ENVIO EL MENSAJE NADIE VA A LEER.
@@ -1138,13 +1141,7 @@ impl Driver {
             //println!("[{}] ACK recibido de {}", current_id, next_id);
         }
     }
-
 }
-
-
-
-
-
 
 /// Check if the driver is alive, if the driver does not respond in 5 seconds, it is considered dead
 /// If dead, remove the driver from the active drivers and add it to the dead drivers
@@ -1169,12 +1166,4 @@ pub fn update_driver_status(status: &mut DriverStatus,
         }
     }
     is_alive
-}
-
-fn next_port(port: u16) -> u16 {
-    if port == 10001 {
-        10002
-    } else {
-        10001
-    }
 }
