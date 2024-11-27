@@ -19,17 +19,16 @@ impl Actor for Driver {
         if self.is_leader.read().unwrap().clone() {
             self.start_ping_system(ctx.address());
         }
+        else {
+            self.check_leader_alive(ctx.address());
+        }
     }
 
     /// Prevents the actor from stopping if any stream close
     fn stopping(&mut self, _: &mut Self::Context) -> actix::Running {
         // Evita que el actor muera mientras tenga streams activos
         // TODO: puse esta condicion rando, se podria poner otra que sea mas logica
-        if !self.active_drivers.read().unwrap().is_empty() {
-            actix::Running::Continue
-        } else {
-            actix::Running::Stop
-        }
+        actix::Running::Continue
     }
 }
 
@@ -328,6 +327,37 @@ impl Handler<DeadDriver> for Driver {
         }
         else {
             eprintln!("Driver {} is not the leader, should not receive this message", self.id);
+        }
+    }
+}
+
+impl Handler<DeadLeader> for Driver {
+    type Result = ();
+
+    fn handle(&mut self, msg: DeadLeader, ctx: &mut Self::Context) -> Self::Result {
+        if *self.is_leader.read().unwrap() {
+            eprintln!("Leader should not receive DeadLeader message");
+        }
+        else {
+            log("LEADER IS DEAD", "DISCONNECTION");
+            self.handle_dead_leader_as_driver(ctx.address()).unwrap();
+        }
+    }
+}
+
+impl Handler<NewLeader> for Driver {
+    type Result = ();
+
+    fn handle(&mut self, msg: NewLeader, ctx: &mut Self::Context) -> Self::Result {
+        if *self.is_leader.read().unwrap() {
+            eprintln!("Leader should not receive NewLeader message");
+        }
+        else if msg.leader_id == self.id {
+            log(&format!("I AM THE NEW LEADER {}", msg.leader_id), "NEW_CONNECTION");
+            //self.handle_new_leader_as_driver(msg, ctx.address()).unwrap();
+        }
+        else {
+            log(&format!("NEW LEADER APPOINTED {}", msg.leader_id), "NEW_CONNECTION");
         }
     }
 }

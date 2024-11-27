@@ -113,6 +113,26 @@ pub struct RestartDriverSearch {
     pub passenger_id: u16,
 }
 
+#[derive(Serialize, Deserialize, Message, Debug, Clone, Copy)]
+#[rtype(result = "()")]
+pub struct DeadLeader {
+    pub leader_id: u16,
+}
+
+#[derive(Serialize, Deserialize, Message, Debug, Clone, Copy)]
+#[rtype(result = "()")]
+pub struct NewLeader {
+    pub leader_id: u16,
+}
+
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub enum RingMessage {
+    Election { participants: Vec<u16> },
+    Coordinator { leader_id: u16, id_origin: u16 },
+    ACK {id_origin: u16},
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(tag = "message_type")]
 /// enum Message used to deserialize
@@ -131,4 +151,5 @@ pub enum MessageType {
     PositionUpdate(PositionUpdate),
     PayRide(PayRide),
     DeadDriver(DeadDriver),
+    DeadLeader(DeadLeader),
 }
