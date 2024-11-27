@@ -930,22 +930,48 @@ impl Driver {
     /// TODO: PROBLEMA: PUEDE QUE OTRO DRIVER TODAVIA NO SE HAYA DADO CUENTA QUE EL LIDER SE CAYO, Y SI ENVIO EL MENSAJE NADIE VA A LEER.
 
     pub fn handle_dead_leader_as_driver(&mut self, addr: Addr<Driver>) -> Result<(), io::Error> {
-        let port = self.id + 4000; // Puerto actual del driver
+
         let id = self.id;
+        let port = self.id + 4000; // Puerto actual del driver
         let socket = self.socket.clone();
 
         let stop = Arc::new((Mutex::new(false), Condvar::new()));
+        let stop_clone = stop.clone();
         let got_ack = Arc::new((Mutex::new(None), Condvar::new()));
-        let leader_id =  Arc::new((Mutex::new(Some(id)), Condvar::new()));
+        let leader_id =  Arc::new((Mutex::new(None), Condvar::new()));
 
-        actix::spawn(async move {
-            Self::receive(id, port, socket, stop, got_ack, leader_id).await;
+        // Lanzar un hilo para el proceso de elección
+        let thread_stop = stop.clone();
+        let thread_leader_id = leader_id.clone();
+
+        thread::spawn(move || {
+            Self::receive(id, port, socket, stop_clone, got_ack, leader_id);
+        });
+
+        // Esperar a que se elija un nuevo líder
+        thread::spawn(move || {
+            let (lock, cvar) = &*thread_leader_id;
+            let mut leader_guard = lock.lock().unwrap();
+            while leader_guard.is_none() {
+                leader_guard = cvar.wait(leader_guard).unwrap();
+            }
+
+            if let Some(new_leader) = *leader_guard {
+                //addr.do_send(NewLeader { leader_id: new_leader });
+                println!("Nuevo líder elegido: {}", new_leader);
+
+                // Detener la ejecución del proceso de elección
+                let (stop_lock, stop_cvar) = &*thread_stop;
+                let mut stop_guard = stop_lock.lock().unwrap();
+                *stop_guard = true;
+                stop_cvar.notify_all();
+            }
         });
 
         Ok(())
     }
 
-    async fn receive(id: u16,
+     fn receive(     id: u16,
                      port: u16,
                      socket: Arc<UdpSocket>,
                      stop: Arc<(Mutex<bool>, Condvar)>,
@@ -971,7 +997,7 @@ impl Driver {
                 Ok(result) => result,
                 Err(e) => {
                     eprintln!("Error al recibir mensaje: {}", e);
-                    continue;
+                    break;
                 }
             };
 
@@ -979,20 +1005,18 @@ impl Driver {
                 Ok(msg) => msg,
                 Err(e) => {
                     eprintln!("Error al deserializar el mensaje: {}", e);
-                    continue;
+                    break;
                 }
             };
 
             match message {
                 RingMessage::ACK { id_origin } => {
-                    println!("{} recibió mensaje de ack", id);
                     let (lock, cvar) = &*got_ack;
                     let mut got_ack = lock.lock().unwrap();
                     *got_ack = Some(id_origin);
                     cvar.notify_one();
                 }
                 RingMessage::Election { mut participants } => {
-                    println!("{} recibió mensaje de elección", id);
                     // Envio ACK
                     let ack_msg = RingMessage::ACK { id_origin: id };
                     let serialized_ack = serde_json::to_vec(&ack_msg).unwrap();
@@ -1001,19 +1025,23 @@ impl Driver {
                     }
 
                     if participants.contains(&id) {
-                        // Ya dio la vuelta, elegir al lider
+                        println!("ENVIANDO MENSAJE DE COORDINADOR");
                         let leader_id = *participants.iter().max().unwrap();
                         let msg_to_send = RingMessage::Coordinator {
                             leader_id,
                             id_origin: id,
                         };
-                        let serialized_message = serde_json::to_vec(&msg_to_send).unwrap();
-                        // envio para atras el mensaje de coordinador
-                        if let Err(e) = socket.send_to(&serialized_message, addr) {
-                            eprintln!("Error al enviar mensaje de coordinador: {}", e);
-                        }
+                        // TODO: ver aca, en el codgio de la practica se envia para atras
+                        let socket_clone = socket.clone();
+                        let id_clone = id.clone();
+                        let got_ack_clone = got_ack.clone();
+                        let msg = serde_json::to_vec(&msg_to_send).unwrap();
+                        thread::spawn(move || {
+                            Self::safe_send_next(socket_clone, msg, id_clone, got_ack_clone);
+                        });
 
                     } else {
+                        println!("ENVIANDO MENSAJE DE ELECCCION");
                         participants.push(id);
                         let msg_to_send = RingMessage::Election { participants };
 
@@ -1029,26 +1057,26 @@ impl Driver {
                 }
                 // Mensaje de coordinador: id_origen es el que primero crea el mensaje de coordinador
                 RingMessage::Coordinator { leader_id, id_origin } => {
-                    println!("{} El nuevo lider es", leader_id);
-
                     *leader_id_cond.0.lock().unwrap() = Some(leader_id);
                     leader_id_cond.1.notify_all();
+
                     // Envio ACK
                     let ack_msg = RingMessage::ACK { id_origin: id };
                     let serialized_ack = serde_json::to_vec(&ack_msg).unwrap();
                     if let Err(e) = socket.send_to(&serialized_ack, addr) {
                         eprintln!("Error al enviar mensaje de ack: {}", e);
                     }
+
                     if id != id_origin {
                         // sigo el anillo
+                        println!("REENVIANDO MENSAJE DE COORDINADOR");
                         let msg_to_send = RingMessage::Coordinator { leader_id, id_origin };
                         let serialized_message = serde_json::to_vec(&msg_to_send).unwrap();
                         let socket_clone = socket.clone();
                         let id_clone = id.clone();
                         let got_ack_clone = got_ack.clone();
-                        let msg = serde_json::to_vec(&serialized_message).unwrap();
                         thread::spawn(move || {
-                            Self::safe_send_next(socket_clone, msg, id_clone, got_ack_clone);
+                            Self::safe_send_next(socket_clone, serialized_message, id_clone, got_ack_clone);
                         });
                     }
                 }
@@ -1063,7 +1091,7 @@ impl Driver {
         current_id: u16,
         got_ack: Arc<(Mutex<Option<u16>>, Condvar)>, // Para manejar el ACK
     ) {
-        println!("HOLA ENTRE");
+
         let mut next_id = current_id + 1; // Lógica para determinar el siguiente nodo
         if next_id == current_id {
             println!("[{}] Enviando {} a {}", current_id, msg[0] as char, next_id);
@@ -1096,7 +1124,7 @@ impl Driver {
             println!("[{}] Timeout esperando ACK de {}", current_id, next_id);
             Self::safe_send_next(socket, msg, next_id, got_ack.clone());
         } else {
-            println!("[{}] ACK recibido de {}", current_id, next_id);
+            //println!("[{}] ACK recibido de {}", current_id, next_id);
         }
     }
 
