@@ -586,7 +586,6 @@ impl Driver {
     /// In case the dead driver was offered a ride and not responded, sends auto decline message, so the RideRequest can be sent to another driver
     pub fn handle_dead_driver_as_leader(&mut self, addr: Addr<Self>, msg: DeadDriver) -> Result<(), io::Error> {
         let mut active_drivers = self.active_drivers.write().unwrap();
-        let mut ride_and_offers = self.ride_manager.ride_and_offers.write().unwrap();
         let mut last_positions = self.drivers_last_position.write().unwrap();
 
         let dead_driver_id = msg.driver_id;
@@ -596,7 +595,7 @@ impl Driver {
         last_positions.remove(&dead_driver_id);
 
         // verificar si en ride and offers se encuentra el driver en ultima posicion de un viaje
-        for (passenger_id, drivers_id) in ride_and_offers.iter_mut() {
+        for (passenger_id, drivers_id) in self.ride_manager.ride_and_offers.iter_mut() {
             if let Some(last_driver) = drivers_id.last() {
                 // si el ultimo id al que se le ofrecio el viaje es el driver muerto
                 // finjo una respuesta del driver muerto
@@ -903,14 +902,14 @@ impl Driver {
         let mut closest_driver = 0;
         let mut min_distance = i32::MAX;
 
-        let offers_and_rides = self.ride_manager.ride_and_offers.read().unwrap();
+        //let offers_and_rides = self.ride_manager.ride_and_offers.read().unwrap();
 
 
         for (driver_id, (x_driver, y_driver)) in drivers_last_position.iter() {
 
             // Si el driver que estoy viendo ya fue ofrecido el viaje, lo salteo
             // TODO: VER MANEJO DE ERRORES
-            if offers_and_rides.contains_key(&message.id) && offers_and_rides.get(&message.id).unwrap().contains(driver_id) {
+            if self.ride_manager.ride_and_offers.contains_key(&message.id) && self.ride_manager.ride_and_offers.get(&message.id).unwrap().contains(driver_id) {
                 continue;
             }
 

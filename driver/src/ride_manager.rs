@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::io;
+use std::io::ErrorKind;
 use std::sync::Arc;
 use std::sync::RwLock;
 
@@ -11,7 +12,7 @@ pub struct RideManager {
     /// Unpaid rides, waiting for payment confirmation
     unpaid_rides: HashMap<u16, RideRequest>,
     /// Passenger last DriveRequest and the drivers who have been offered the ride
-    pub ride_and_offers: Arc<RwLock<HashMap<u16, Vec<u16>>>>,
+    pub ride_and_offers: HashMap<u16, Vec<u16>>,
     /// Already paid rides (ride_id, PaymentAccepted). It is used to send payment to the driver
     /// from the leader
     pub paid_rides: Arc<RwLock<HashMap<u16, PaymentAccepted>>>,
@@ -45,74 +46,42 @@ impl RideManager {
     /// * `passenger_id` - The id of the passenger
     /// * `driver_id` - The id of the driver
     pub fn insert_in_rides_and_offers(
-        &self,
+        &mut self,
         passenger_id: u16,
         driver_id: u16,
     ) -> Result<(), io::Error> {
-        let mut ride_and_offers = self.ride_and_offers.write();
-        match ride_and_offers {
-            Ok(mut ride_and_offers) => {
-                if let Some(offers) = ride_and_offers.get_mut(&passenger_id) {
-                    offers.push(driver_id);
-                } else {
-                    ride_and_offers.insert(passenger_id, vec![driver_id]);
-                }
-            }
-            Err(e) => {
-                eprintln!(
-                    "Error obtaining writing lock from `ride_and_offers`: {:?}",
-                    e
-                );
-                return Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    "Error obtaining writing lock from `ride_and_offers`",
-                ));
-            }
+
+        if let Some(offers) = self.ride_and_offers.get_mut(&passenger_id) {
+            offers.push(driver_id);
+        } else {
+            self.ride_and_offers.insert(passenger_id, vec![driver_id]);
         }
         Ok(())
     }
 
     /// Removes the passenger id from the ride_and_offers hashmap
-    pub fn remove_from_ride_and_offers(&self, passenger_id: u16) -> Result<(), io::Error> {
-        let mut ride_and_offers = self.ride_and_offers.write();
-        match ride_and_offers {
-            Ok(mut ride_and_offers) => {
-                if ride_and_offers.remove(&passenger_id).is_none() {
-                    eprintln!(
-                        "RideRequest with id {} not found in ride_and_offers",
-                        passenger_id
-                    );
-                }
-            }
-            Err(e) => {
-                eprintln!(
-                    "Error obtaining writing lock from `ride_and_offers`: {:?}",
-                    e
-                );
-                return Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    "Error obtaining writing lock from `ride_and_offers`",
-                ));
-            }
+    pub fn remove_from_ride_and_offers(&mut self, passenger_id: u16) -> Result<(), io::Error> {
+        match self.ride_and_offers.remove(&passenger_id) {
+            Some(_) => Ok(()), // Se encontró y eliminó
+            None => Err(io::Error::new(
+                ErrorKind::NotFound,
+                format!("RideRequest with id {} not found in ride_and_offers", passenger_id),
+            )),
         }
-        Ok(())
     }
 
     /// Removes all the offers from the ride_and_offers hashmap to the passenger_id
-    pub fn remove_offers_from_ride_and_offers(&self, passenger_id: u16) -> Result<(), io::Error> {
-        let mut ride_and_offers = self.ride_and_offers.write();
-        match ride_and_offers {
-            Ok(mut ride_and_offers) => {
-                if let Some(offers) = ride_and_offers.get_mut(&passenger_id) {
-                    offers.clear();
-                }
-            },
-            Err(e) => {
-                eprintln!("Error obtaining writing lock from `ride_and_offers`: {:?}", e);
-                return Err(io::Error::new(io::ErrorKind::Other, "Error obtaining writing lock from `ride_and_offers`"));
+    pub fn remove_offers_from_ride_and_offers(&mut self, passenger_id: u16) -> Result<(), io::Error> {
+        match self.ride_and_offers.get_mut(&passenger_id){
+            Some(offers) => {
+                offers.clear();
+                Ok(())
             }
+            None => Err(io::Error::new(
+                ErrorKind::NotFound,
+                format!("RideRequest with id {} not found in ride_and_offers", passenger_id), // Interpolación correcta
+            ))
         }
-        Ok(())
     }
 
     /// Upon receiving a ride request, the leader will add it to the unpaid rides
@@ -175,7 +144,7 @@ impl RideManager {
         RideManager {
             pending_rides: HashMap::new(),
             unpaid_rides: HashMap::new(),
-            ride_and_offers: Arc::new(RwLock::new(HashMap::new())),
+            ride_and_offers: HashMap::new(),
             paid_rides: Arc::new(RwLock::new(HashMap::new())),
         }
     }
@@ -259,7 +228,7 @@ mod tests {
 
     #[test]
     fn test_insert_and_clear_rides_and_offers() {
-        let ride_manager = RideManager::new();
+        let mut ride_manager = RideManager::new();
 
         let passenger_id = 1;
         let driver_id = 101;
@@ -268,19 +237,15 @@ mod tests {
         // Insert ride and offer
         assert!(ride_manager.insert_in_rides_and_offers(passenger_id, driver_id).is_ok());
         assert!(ride_manager.insert_in_rides_and_offers(passenger_id, driver_id2).is_ok());
-        {
-            let ride_and_offers = ride_manager.ride_and_offers.read().unwrap();
-            assert!(ride_and_offers.contains_key(&passenger_id));
-            assert_eq!(ride_and_offers[&passenger_id], vec![driver_id, driver_id2]);
-        }
+
+        assert!(ride_manager.ride_and_offers.contains_key(&passenger_id));
+        assert_eq!(ride_manager.ride_and_offers[&passenger_id], vec![driver_id, driver_id2]);
 
         // Clear offers
         assert!(ride_manager.remove_offers_from_ride_and_offers(passenger_id).is_ok());
-        {
-            let ride_and_offers = ride_manager.ride_and_offers.read().unwrap();
-            assert!(ride_and_offers.contains_key(&passenger_id));
-            assert!(ride_and_offers[&passenger_id].is_empty());
-        }
+        assert!(ride_manager.ride_and_offers.contains_key(&passenger_id));
+        assert!(ride_manager.ride_and_offers[&passenger_id].is_empty());
+
     }
 
     #[test]
