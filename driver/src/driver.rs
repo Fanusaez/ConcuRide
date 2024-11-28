@@ -60,7 +60,7 @@ pub struct Driver {
     /// The connections to the drivers
     pub active_drivers: Arc<RwLock<HashMap<u16, (Option<ReadHalf<TcpStream>>, Option<WriteHalf<TcpStream>>)>>>,
     /// ID's of Dead Drivers
-    pub dead_drivers: Arc<RwLock<Vec<u16>>>,
+    pub dead_drivers: Vec<u16>,
     /// States of the driver
     pub state: Sates,
     /// Last known position of the driver (port, (x, y))
@@ -92,7 +92,6 @@ impl Driver {
 
         // Auxiliar structures
         let mut active_drivers: HashMap<u16, (Option<ReadHalf<TcpStream>>, Option<WriteHalf<TcpStream>>)> = HashMap::new();
-        let dead_drivers: Arc<RwLock<Vec<u16>>> = Arc::new(RwLock::new(Vec::new()));
         let mut drivers_last_position: HashMap<u16, (i32, i32)> = HashMap::new();
         let passengers_write_half: HashMap<u16, Option<WriteHalf<TcpStream>>> = HashMap::new();
         let mut drivers_status: HashMap<u16, DriverStatus> = HashMap::new();
@@ -152,7 +151,7 @@ impl Driver {
                 leader_port: leader_port.clone(),
                 last_ping_by_leader,
                 active_drivers: active_drivers_arc.clone(),
-                dead_drivers,
+                dead_drivers: Vec::new(),
                 write_half_to_leader: half_write_to_leader.clone(),
                 passengers_write_half: passengers_write_half_arc.clone(),
                 state: Sates::Idle,
@@ -587,14 +586,13 @@ impl Driver {
     /// In case the dead driver was offered a ride and not responded, sends auto decline message, so the RideRequest can be sent to another driver
     pub fn handle_dead_driver_as_leader(&mut self, addr: Addr<Self>, msg: DeadDriver) -> Result<(), io::Error> {
         let mut active_drivers = self.active_drivers.write().unwrap();
-        let mut dead_drivers = self.dead_drivers.write().unwrap();
         let mut ride_and_offers = self.ride_manager.ride_and_offers.write().unwrap();
         let mut last_positions = self.drivers_last_position.write().unwrap();
 
         let dead_driver_id = msg.driver_id;
 
         active_drivers.remove(&dead_driver_id);
-        dead_drivers.push(dead_driver_id);
+        self.dead_drivers.push(dead_driver_id);
         last_positions.remove(&dead_driver_id);
 
         // verificar si en ride and offers se encuentra el driver en ultima posicion de un viaje
