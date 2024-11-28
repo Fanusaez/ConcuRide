@@ -7,9 +7,9 @@ use crate::models::*;
 
 pub struct RideManager {
     /// Pending rides, already paid rides, waiting to be accepted by a driver
-    pub pending_rides: HashMap<u16, RideRequest>,
+    pending_rides: HashMap<u16, RideRequest>,
     /// Unpaid rides, waiting for payment confirmation
-    pub unpaid_rides: Arc<RwLock<HashMap<u16, RideRequest>>>,
+    unpaid_rides: HashMap<u16, RideRequest>,
     /// Passenger last DriveRequest and the drivers who have been offered the ride
     pub ride_and_offers: Arc<RwLock<HashMap<u16, Vec<u16>>>>,
     /// Already paid rides (ride_id, PaymentAccepted). It is used to send payment to the driver
@@ -118,34 +118,14 @@ impl RideManager {
     /// Upon receiving a ride request, the leader will add it to the unpaid rides
     /// # Arguments
     /// * `msg` - The message containing the ride request
-    pub fn insert_unpaid_ride(&self, msg: RideRequest) -> Result<(), io::Error> {
-        let mut unpaid_rides = self.unpaid_rides.write();
-        match unpaid_rides {
-            Ok(mut unpaid_rides) => {
-                unpaid_rides.insert(msg.id, msg);
-            }
-            Err(e) => {
-                eprintln!("Error obtaining writing lock from `unpaid_rides`: {:?}", e);
-                return Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    "Error obtaining writing lock from `unpaid_rides`",
-                ));
-            }
-        }
+    pub fn insert_unpaid_ride(&mut self, msg: RideRequest) -> Result<(), io::Error> {
+        self.unpaid_rides.insert(msg.id, msg);
         Ok(())
     }
 
     /// Removes unpaid ride from the hashmap
-    pub fn remove_unpaid_ride(&self, passenger_id: u16) -> Result<RideRequest, io::Error> {
-        let mut unpaid_rides = self.unpaid_rides.write().map_err(|e| {
-            eprintln!("Error obtaining writing lock from `unpaid_rides`: {:?}", e);
-            io::Error::new(
-                io::ErrorKind::Other,
-                "Error obtaining writing lock from `unpaid_rides`",
-            )
-        })?;
-
-        if let Some(ride_request) = unpaid_rides.remove(&passenger_id) {
+    pub fn remove_unpaid_ride(&mut self, passenger_id: u16) -> Result<RideRequest, io::Error> {
+        if let Some(ride_request) = self.unpaid_rides.remove(&passenger_id) {
             Ok(ride_request)
         } else {
             eprintln!(
@@ -194,7 +174,7 @@ impl RideManager {
     pub fn new() -> Self {
         RideManager {
             pending_rides: HashMap::new(),
-            unpaid_rides: Arc::new(RwLock::new(HashMap::new())),
+            unpaid_rides: HashMap::new(),
             ride_and_offers: Arc::new(RwLock::new(HashMap::new())),
             paid_rides: Arc::new(RwLock::new(HashMap::new())),
         }
@@ -305,7 +285,7 @@ mod tests {
 
     #[test]
     fn test_insert_and_remove_unpaid_ride() {
-        let ride_manager = RideManager::new();
+        let mut ride_manager = RideManager::new();
 
         let ride_request = RideRequest {
             id: 1,
@@ -316,19 +296,13 @@ mod tests {
         };
 
         // Insert unpaid ride
-        assert!(ride_manager.insert_unpaid_ride(ride_request.clone()).is_ok());
-        {
-            let unpaid_rides = ride_manager.unpaid_rides.read().unwrap();
-            assert!(unpaid_rides.contains_key(&ride_request.id));
-        }
+        assert!(ride_manager.insert_unpaid_ride(ride_request).is_ok());
+        assert!(ride_manager.unpaid_rides.contains_key(&ride_request.id));
 
         // Remove unpaid ride
         let removed_ride = ride_manager.remove_unpaid_ride(ride_request.id).unwrap();
         assert_eq!(removed_ride.id, ride_request.id);
-        {
-            let unpaid_rides = ride_manager.unpaid_rides.read().unwrap();
-            assert!(!unpaid_rides.contains_key(&ride_request.id));
-        }
+        assert!(!ride_manager.unpaid_rides.contains_key(&ride_request.id));
     }
 
     #[test]
