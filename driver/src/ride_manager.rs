@@ -82,6 +82,13 @@ impl RideManager {
         }
     }
 
+    /// Checks if a driver has already been offered the ride
+    pub fn driver_has_already_been_offered_ride(&self, passenger_id: u16, driver_id: u16) -> bool {
+        self.ride_and_offers
+            .get(&passenger_id)
+            .map_or(false, |drivers| drivers.contains(&driver_id))
+    }
+
     /// Upon receiving a ride request, the leader will add it to the unpaid rides
     /// # Arguments
     /// * `msg` - The message containing the ride request

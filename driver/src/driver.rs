@@ -908,8 +908,7 @@ impl Driver {
         for (driver_id, (x_driver, y_driver)) in drivers_last_position.iter() {
 
             // Si el driver que estoy viendo ya fue ofrecido el viaje, lo salteo
-            // TODO: VER MANEJO DE ERRORES
-            if self.ride_manager.ride_and_offers.contains_key(&message.id) && self.ride_manager.ride_and_offers.get(&message.id).unwrap().contains(driver_id) {
+            if self.ride_manager.driver_has_already_been_offered_ride(message.id, *driver_id) {
                 continue;
             }
 
