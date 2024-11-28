@@ -342,7 +342,7 @@ impl Handler<NewLeader> for Driver {
     type Result = ();
 
     fn handle(&mut self, msg: NewLeader, ctx: &mut Self::Context) -> Self::Result {
-        if *self.is_leader.read().unwrap() {
+        if self.is_leader{
             eprintln!("Leader should not receive NewLeader message");
         }
         else if msg.leader_id == self.id {

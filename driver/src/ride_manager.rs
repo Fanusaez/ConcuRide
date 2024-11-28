@@ -1,9 +1,12 @@
 use std::collections::HashMap;
-use std::io;
-use std::io::ErrorKind;
-
+use std::{fs, io};
+use std::io::{ErrorKind, Write};
+use serde::{Deserialize, Serialize};
 use crate::models::*;
 
+const BACKUP_PATH: &str = "./backup.txt";
+
+#[derive(Serialize, Deserialize, Debug)]
 pub struct RideManager {
     /// Pending rides, already paid rides, waiting to be accepted by a driver
     pending_rides: HashMap<u16, RideRequest>,
@@ -173,6 +176,51 @@ impl RideManager {
                 ErrorKind::NotFound,
                 format!("PaymentAccepted not found for ride_id: {}", ride_id),
             )),
+        }
+    }
+
+    /// Saves in a file the state of the rides so if the leader disconnects
+    /// the new leader can access to the information
+    /// # Arguments
+    /// * `pending_rides` - already paid rides, waiting to be accepted by a driver
+    /// * `unpaid_rides` - waiting for payment confirmation
+    /// * `ride_and_offers` - Passenger last DriveRequest and the drivers who have been offered the ride
+    /// * `paid_rides` - Already paid rides (ride_id, PaymentAccepted). It is used to send payment to the driver from the leader
+    /// * `path` - path to the file that will save the information
+    pub fn create_backup(&self, path: &str) -> Result<(), io::Error> {
+        // Serialize data to JSON
+        let json_data = serde_json::to_string_pretty(self)
+            .expect("Error serializing backup data to JSON");
+
+        // Save JSON in the file
+        let mut file = fs::File::create(path)?; // Deletes file if it already exists
+        file.write_all(json_data.as_bytes())?;
+        Ok(())
+    }
+
+    /// Loads data from JSON file and returns it in a struct
+    /// TODO: Manejar errores si el archivo no existe y acoplar al ride manager
+    /// en vez de devolverlo
+    pub fn load_backup(&self, path: &str) -> Result<RideManager, io::Error> {
+        // Read file content
+        match fs::read_to_string(path) {
+            Ok(json_data) => {
+                // Deserialize JSON to RideManager structure
+                match serde_json::from_str::<RideManager>(&json_data) {
+                    Ok(backup_data) => {
+                        println!("Backup: {:?}", backup_data);
+                        Ok(backup_data)
+                    },
+                    Err(e) => Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("Error deserializing backup data: {}", e),
+                    )),
+                }
+            }
+            Err(e) => {
+                println!("Backup non existing file: {}", e);
+                return Err(e);
+            }
         }
     }
 }
