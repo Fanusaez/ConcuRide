@@ -52,7 +52,7 @@ pub struct Driver {
     /// Whether the driver is the leader
     pub is_leader: Arc<RwLock<bool>>,
     /// Leader port
-    pub leader_port: Arc<RwLock<u16>>,
+    pub leader_port: u16,
     /// write half
     pub write_half_to_leader: Arc<RwLock<Option<WriteHalf<TcpStream>>>>,
     /// Liders last ping
@@ -64,7 +64,7 @@ pub struct Driver {
     /// States of the driver
     pub state: Sates,
     /// Last known position of the driver (port, (x, y))
-    pub drivers_last_position: Arc<RwLock<HashMap<u16, (i32, i32)>>>,
+    pub drivers_last_position: HashMap<u16, (i32, i32)>,
     /// Connection to the payment app
     pub payment_write_half: Arc<RwLock<Option<WriteHalf<TcpStream>>>>,
     /// Ride manager, contains the pending rides, unpaid rides and the rides and offers
@@ -89,7 +89,7 @@ impl Driver {
         // Driver-leader attributes
         let should_be_leader = port == drivers_ports[LIDER_PORT_IDX];
         let is_leader = Arc::new(RwLock::new(should_be_leader));
-        let leader_port = Arc::new(RwLock::new(drivers_ports[LIDER_PORT_IDX].clone()));
+        let leader_port = drivers_ports[LIDER_PORT_IDX].clone();
         let last_ping_by_leader = std::time::Instant::now();
 
         // Auxiliar structures
@@ -124,7 +124,7 @@ impl Driver {
 
         // Arcs for shared data
         let mut active_drivers_arc = Arc::new(RwLock::new(active_drivers));
-        let mut drivers_last_position_arc = Arc::new(RwLock::new(drivers_last_position));
+        //let mut drivers_last_position_arc = Arc::new(RwLock::new(drivers_last_position));
         let mut payment_write_half_arc = Arc::new(RwLock::new(payment_write_half));
         let mut payment_read_half_arc = Arc::new(RwLock::new(payment_read_half));
         let mut passengers_write_half_arc = Arc::new(RwLock::new(passengers_write_half));
@@ -160,7 +160,7 @@ impl Driver {
                 write_half_to_leader: half_write_to_leader.clone(),
                 passengers_write_half: passengers_write_half_arc.clone(),
                 state: Sates::Idle,
-                drivers_last_position: drivers_last_position_arc.clone(),
+                drivers_last_position,
                 payment_write_half: payment_write_half_arc.clone(),
                 drivers_status: drivers_status_arc.clone(),
                 ride_manager: RideManager::new(),
@@ -366,10 +366,7 @@ impl Driver {
 
     pub fn check_leader_alive(&mut self, addr: Addr<Driver>) {
         let last_ping_by_leader = self.last_ping_by_leader.clone();
-        let leader_id = {
-            let guard = self.leader_port.read().unwrap();
-            *guard
-        };
+        let leader_id = self.leader_port;
 
         actix::spawn(async move {
             loop {
@@ -594,13 +591,12 @@ impl Driver {
         let mut active_drivers = self.active_drivers.write().unwrap();
         let mut dead_drivers = self.dead_drivers.write().unwrap();
         let mut ride_and_offers = self.ride_manager.ride_and_offers.write().unwrap();
-        let mut last_positions = self.drivers_last_position.write().unwrap();
 
         let dead_driver_id = msg.driver_id;
 
         active_drivers.remove(&dead_driver_id);
         dead_drivers.push(dead_driver_id);
-        last_positions.remove(&dead_driver_id);
+        self.drivers_last_position.remove(&dead_driver_id);
 
         // verificar si en ride and offers se encuentra el driver en ultima posicion de un viaje
         for (passenger_id, drivers_id) in ride_and_offers.iter_mut() {
@@ -727,8 +723,7 @@ impl Driver {
 
     /// Handles the PositionUpdate message from the driver
     pub fn handle_position_update_as_leader(&mut self, msg: PositionUpdate) -> Result<(), io::Error> {
-        let mut positions = self.drivers_last_position.write().unwrap();
-        positions.insert(msg.driver_id, msg.position);
+        self.drivers_last_position.insert(msg.driver_id, msg.position);
         Ok(())
     }
 
@@ -906,14 +901,13 @@ impl Driver {
         // PickUp position
         let (x_passenger, y_passenger) = (message.x_origin as i32, message.y_origin as i32);
 
-        let drivers_last_position = self.drivers_last_position.read().unwrap();
         let mut closest_driver = 0;
         let mut min_distance = i32::MAX;
 
         let offers_and_rides = self.ride_manager.ride_and_offers.read().unwrap();
 
 
-        for (driver_id, (x_driver, y_driver)) in drivers_last_position.iter() {
+        for (driver_id, (x_driver, y_driver)) in self.drivers_last_position.iter() {
 
             // Si el driver que estoy viendo ya fue ofrecido el viaje, lo salteo
             // TODO: VER MANEJO DE ERRORES
