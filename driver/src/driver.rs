@@ -413,7 +413,7 @@ impl Driver {
 
         // Si ya hay un RideRequest en proceso, se ignora
         // TODO: quizas deberiamos prohibir esto en el pasajero
-        if self.ride_manager.has_pending_ride_request(msg.id)? {
+        if self.ride_manager.has_pending_ride_request(msg.id) {
             // Ignorar si ya hay un RideRequest en proceso
             return Ok(());
         }
@@ -740,7 +740,7 @@ impl Driver {
     /// * `passenger_id` - The id of the passenger
     pub fn verify_pending_ride_request(&self, passenger_id: u16) -> Result<(), io::Error> {
         // Verificar si hay una solicitud pendiente
-        let has_pending = self.ride_manager.has_pending_ride_request(passenger_id)?;
+        let has_pending = self.ride_manager.has_pending_ride_request(passenger_id);
 
         if !has_pending {
             return Ok(());
