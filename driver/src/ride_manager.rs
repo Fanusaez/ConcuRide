@@ -1,8 +1,6 @@
 use std::collections::HashMap;
 use std::io;
 use std::io::ErrorKind;
-use std::sync::Arc;
-use std::sync::RwLock;
 
 use crate::models::*;
 
@@ -15,7 +13,7 @@ pub struct RideManager {
     pub ride_and_offers: HashMap<u16, Vec<u16>>,
     /// Already paid rides (ride_id, PaymentAccepted). It is used to send payment to the driver
     /// from the leader
-    pub paid_rides: Arc<RwLock<HashMap<u16, PaymentAccepted>>>,
+    paid_rides: HashMap<u16, PaymentAccepted>,
 }
 
 impl RideManager {
@@ -102,7 +100,7 @@ impl RideManager {
                 passenger_id
             );
             Err(io::Error::new(
-                io::ErrorKind::NotFound,
+                ErrorKind::NotFound,
                 "RideRequest not found in unpaid_rides",
             ))
         }
@@ -122,7 +120,7 @@ impl RideManager {
                 passenger_id
             );
             Err(io::Error::new(
-                io::ErrorKind::NotFound,
+                ErrorKind::NotFound,
                 "RideRequest not found in 'pending_rides'",
             ))
         }
@@ -145,48 +143,29 @@ impl RideManager {
             pending_rides: HashMap::new(),
             unpaid_rides: HashMap::new(),
             ride_and_offers: HashMap::new(),
-            paid_rides: Arc::new(RwLock::new(HashMap::new())),
+            paid_rides: HashMap::new(),
         }
     }
 
     /// Inserts ride in paid_rides with the ride_id as the key and the
     /// PaymentAccepted msg as the value
     pub fn insert_ride_in_paid_rides(
-        &self,
+        &mut self,
         ride_id: u16,
         msg: PaymentAccepted,
     ) -> Result<(), io::Error> {
-        let mut rides = self.paid_rides.write().map_err(|e| {
-            eprintln!("Error obtaining write lock: {:?}", e);
-            io::Error::new(io::ErrorKind::Other, "PoisonError")
-        })?;
-        rides.insert(ride_id, msg);
+        self.paid_rides.insert(ride_id, msg);
         Ok(())
     }
 
     /// Removes PaymentAccepted with the information of the payment and returns it
-    pub fn get_ride_from_paid_rides(&self, ride_id: u16) -> Result<PaymentAccepted, io::Error> {
-        let mut paid_rides = self.paid_rides.write().map_err(|e| {
-            eprintln!(
-                "Error obtaining writing lock from `paid_rides`: {:?}",
-                e
-            );
-            io::Error::new(
-                io::ErrorKind::Other,
-                "Error writing lock from `paid_rides`",
-            )
-        })?;
-        if let Some(payment) = paid_rides.remove(&ride_id) {
-            Ok(payment)
-        } else {
-            eprintln!(
-                "PaymentAccepted with id {} not found in paid_rides",
-                ride_id
-            );
-            Err(io::Error::new(
-                io::ErrorKind::NotFound,
-                "PaymentAccepted not found in paid_rides",
-            ))
+    pub fn get_ride_from_paid_rides(&mut self, ride_id: u16) -> Result<PaymentAccepted, io::Error> {
+        match self.paid_rides.remove(&ride_id) {
+            Some(msg) => {Ok(msg)}
+            None => Err(io::Error::new(
+                ErrorKind::NotFound,
+                format!("PaymentAccepted not found for ride_id: {}", ride_id),
+            )),
         }
     }
 }
@@ -194,7 +173,6 @@ impl RideManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
     use models::RideRequest;
     use crate::models;
 
