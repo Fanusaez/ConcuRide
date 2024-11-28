@@ -119,6 +119,13 @@ pub struct DeadLeader {
     pub leader_id: u16,
 }
 
+#[derive(Serialize, Deserialize, Message, Debug, Clone, Copy)]
+#[rtype(result = "()")]
+pub struct NewLeader {
+    pub leader_id: u16,
+}
+
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum RingMessage {
     Election { participants: Vec<u16> },
