@@ -50,7 +50,7 @@ pub struct Driver {
     /// The driver's position
     pub position: (i32, i32),
     /// Whether the driver is the leader
-    pub is_leader: Arc<RwLock<bool>>,
+    pub is_leader: bool,
     /// Leader port
     pub leader_port: Arc<RwLock<u16>>,
     /// write half
@@ -86,7 +86,7 @@ impl Driver {
     pub async fn start(port: u16, mut drivers_ports: Vec<u16>, position: (i32, i32)) -> Result<(), io::Error> {
         // Driver-leader attributes
         let should_be_leader = port == drivers_ports[LIDER_PORT_IDX];
-        let is_leader = Arc::new(RwLock::new(should_be_leader));
+        let is_leader = should_be_leader;
         let leader_port = Arc::new(RwLock::new(drivers_ports[LIDER_PORT_IDX].clone()));
         let last_ping_by_leader = std::time::Instant::now();
 
@@ -148,7 +148,7 @@ impl Driver {
             Driver {
                 id: port,
                 position, // Arrancan en el origen por comodidad, ver despues que onda
-                is_leader: is_leader.clone(),
+                is_leader,
                 leader_port: leader_port.clone(),
                 last_ping_by_leader,
                 active_drivers: active_drivers_arc.clone(),
