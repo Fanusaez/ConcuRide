@@ -1,6 +1,7 @@
 use std::fmt::format;
 use std::io;
 use std::io::Error;
+use std::sync::atomic::Ordering;
 use tokio::io::{split, AsyncBufReadExt, BufReader, AsyncWriteExt, WriteHalf, AsyncReadExt, ReadHalf};
 use actix::{Actor, AsyncContext, Context, ContextFutureSpawner, Handler, StreamHandler, WrapFuture};
 use tokio_stream::wrappers::LinesStream;
@@ -17,7 +18,7 @@ impl Actor for Driver {
     /// Called when the actor is started
     /// Starts the ping system if the driver is the leader
     fn started(&mut self, ctx: &mut Self::Context) {
-        if self.is_leader {
+        if self.is_leader.load(Ordering::SeqCst) {
             self.start_ping_system(ctx.address());
         }
         else {
@@ -93,7 +94,7 @@ impl Handler<RideRequest> for Driver {
 
     /// Handles the ride request message depending on whether the driver is the leader or not.
     fn handle(&mut self, msg: RideRequest, ctx: &mut Self::Context) -> Self::Result {
-        if self.is_leader {
+        if self.is_leader.load(Ordering::SeqCst) {
             // todo: ojo, si el pasajero se reconcto no deberia imprimirse esto, en handle_ride_request_as_leader se maneja y hay otro TODO
             log(&format!("LEADER RECEIVED RIDE REQUEST FROM PASSENGER {}", msg.id), "DRIVER");
             self.handle_ride_request_as_leader(msg).expect("Error handling ride request as leader");
@@ -110,7 +111,7 @@ impl Handler<PaymentAccepted> for Driver {
     /// Only received by leader
     /// Handles the payment accepted message
     fn handle(&mut self, msg: PaymentAccepted, ctx: &mut Self::Context) -> Self::Result {
-        if self.is_leader {
+        if self.is_leader.load(Ordering::SeqCst) {
             self.handle_payment_accepted_as_leader(msg, ctx.address()).unwrap();
         }
         else {
@@ -123,7 +124,7 @@ impl Handler<PaymentRejected> for Driver {
     type Result = ();
     /// Only received by leader
     fn handle(&mut self, msg: PaymentRejected, ctx: &mut Self::Context) -> Self::Result {
-        if self.is_leader {
+        if self.is_leader.load(Ordering::SeqCst) {
             log(&format!("PAYMENT REJECTED FOR PASSENGER {}", msg.id), "DRIVER");
             self.handle_payment_rejected_as_leader(msg).unwrap();
         }
@@ -139,7 +140,7 @@ impl Handler<AcceptRide> for Driver {
     /// Only received by leader
     /// Ride offered made to driver was accepted
     fn handle(&mut self, msg: AcceptRide, _ctx: &mut Self::Context) -> Self::Result {
-        if self.is_leader {
+        if self.is_leader.load(Ordering::SeqCst) {
             self.handle_accept_ride_as_leader(msg).unwrap();
             log(&format!("RIDE REQUEST {} WAS ACCEPTED BY DRIVER {}", msg.passenger_id, msg.driver_id ,), "DRIVER");
         }
@@ -154,7 +155,7 @@ impl Handler<DeclineRide> for Driver {
     /// Only received by leader
     /// Ride offered made to driver was declined
     fn handle(&mut self, msg: DeclineRide, ctx: &mut Self::Context) -> Self::Result {
-        if self.is_leader {
+        if self.is_leader.load(Ordering::SeqCst) {
             log(&format!("RIDE REQUEST {} WAS DECLINED BY DRIVER {}", msg.passenger_id, msg.driver_id, ), "DRIVER");
             match self.handle_declined_ride_as_leader(msg, ctx.address()) {
                 Ok(_) => {}
@@ -174,7 +175,7 @@ impl Handler<FinishRide> for Driver {
     /// If the driver is the leader, will remove the ride from the pending rides and notify the passenger
     /// If the driver is not the leader, will send the message to the leader
     fn handle(&mut self, msg: FinishRide, _ctx: &mut Self::Context) -> Self::Result {
-        if self.is_leader {
+        if self.is_leader.load(Ordering::SeqCst) {
             log(&format!("RIDE REQUEST {} WAS FINISHED BY DRIVER {}", msg.passenger_id, msg.driver_id, ), "DRIVER");
             self.handle_finish_ride_as_leader(msg).unwrap();
         } else {
@@ -190,7 +191,7 @@ impl Handler<RestartDriverSearch> for Driver {
 
     /// Handles the restart driver search message
     fn handle(&mut self, msg: RestartDriverSearch, ctx: &mut Self::Context) -> Self::Result {
-        if self.is_leader {
+        if self.is_leader.load(Ordering::SeqCst) {
             self.handle_restart_driver_search_as_leader(msg, ctx.address()).unwrap();
         } else {
             eprintln!("Driver {} is not the leader, should not receive this message", self.id);
@@ -263,7 +264,7 @@ impl Handler<Ping> for Driver {
     type Result = ();
 
     fn handle(&mut self, msg: Ping, _ctx: &mut Self::Context) -> Self::Result {
-        if self.is_leader {
+        if self.is_leader.load(Ordering::SeqCst) {
             self.handle_ping_as_leader(msg).unwrap();
         } else {
             self.handle_ping_as_driver(msg).unwrap();
@@ -277,7 +278,7 @@ impl Handler<SendPingTo> for Driver {
     type Result = ();
 
     fn handle(&mut self, msg: SendPingTo, _ctx: &mut Self::Context) -> Self::Result {
-        if self.is_leader {
+        if self.is_leader.load(Ordering::SeqCst) {
             self.send_ping_to_driver(msg.id_to_send).unwrap();
         } else {
             eprintln!("Driver {} is not the leader, should not receive this message", self.id);
@@ -290,7 +291,7 @@ impl Handler<PositionUpdate> for Driver {
     /// Handles the position update message
     /// If the driver is the leader, will update the position of the driver
     fn handle(&mut self, msg: PositionUpdate, _ctx: &mut Self::Context) -> Self::Result {
-        if self.is_leader {
+        if self.is_leader.load(Ordering::SeqCst) {
             self.handle_position_update_as_leader(msg).unwrap();
         }
         else {
@@ -303,7 +304,7 @@ impl Handler<PositionUpdate> for Driver {
 impl Handler<PayRide> for Driver {
     type Result = ();
     fn handle(&mut self, msg: PayRide, ctx: &mut Self::Context) -> Self::Result {
-        if self.is_leader {
+        if self.is_leader.load(Ordering::SeqCst) {
             eprintln!("Leader should not receive payment message");
         } else {
             log(&format!("DRIVER {} RECEIVED PAYMENT FOR RIDE {}", self.id, msg.ride_id), "DRIVER");
@@ -315,7 +316,7 @@ impl Handler<DeadDriver> for Driver {
     type Result = ();
 
     fn handle(&mut self, msg: DeadDriver, ctx: &mut Self::Context) -> Self::Result {
-        if self.is_leader {
+        if self.is_leader.load(Ordering::SeqCst) {
             log(&format!("DRIVER {} IS DEAD", msg.driver_id), "DISCONNECTION");
             self.handle_dead_driver_as_leader(ctx.address(), msg).unwrap();
         }
@@ -329,7 +330,7 @@ impl Handler<DeadLeader> for Driver {
     type Result = ();
 
     fn handle(&mut self, msg: DeadLeader, ctx: &mut Self::Context) -> Self::Result {
-        if self.is_leader {
+        if self.is_leader.load(Ordering::SeqCst) {
             eprintln!("Leader should not receive DeadLeader message");
         }
         else {
@@ -343,7 +344,7 @@ impl Handler<NewLeader> for Driver {
     type Result = ();
 
     fn handle(&mut self, msg: NewLeader, ctx: &mut Self::Context) -> Self::Result {
-        if self.is_leader{
+        if self.is_leader.load(Ordering::SeqCst){
             eprintln!("Leader should not receive NewLeader message");
         }
         else if msg.leader_id == self.id {
@@ -361,7 +362,7 @@ impl Handler<NewLeaderAttributes> for Driver {
     type Result = ();
 
     fn handle(&mut self, msg: NewLeaderAttributes, ctx: &mut Self::Context) -> Self::Result {
-        if self.is_leader {
+        if self.is_leader.load(Ordering::SeqCst) {
             log("NEW LEADER ATTRIBUTES RECEIVED", "NEW_CONNECTION");
             self.handle_new_leader_attributes_as_leader(msg, ctx.address()).unwrap();
         }

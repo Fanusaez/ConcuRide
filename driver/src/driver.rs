@@ -60,7 +60,7 @@ pub struct Driver {
     /// The driver's position
     pub position: (i32, i32),
     /// Whether the driver is the leader
-    pub is_leader: bool,
+    pub is_leader: Arc<AtomicBool>,
     /// Leader port
     pub leader_port: u16,
     /// write half
@@ -101,6 +101,7 @@ impl Driver {
         // Driver-leader attributes
         let should_be_leader = port == drivers_ports[LIDER_PORT_IDX];
         let is_leader = should_be_leader;
+        let is_leader_arc = Arc::new(AtomicBool::new(is_leader));
         let leader_port = drivers_ports[LIDER_PORT_IDX].clone();
         let last_ping_manager = LastPingManager { last_ping: Instant::now() }.start();
 
@@ -164,7 +165,7 @@ impl Driver {
             Driver {
                 id: port,
                 position, // Arrancan en el origen por comodidad, ver despues que onda
-                is_leader,
+                is_leader: is_leader_arc.clone(),
                 leader_port: leader_port.clone(),
                 last_ping_by_leader: last_ping_manager, // porque le ponian clone?
                 active_drivers: active_drivers_arc.clone(),
@@ -186,9 +187,11 @@ impl Driver {
         let listener = TcpListener::bind(format!("127.0.0.1:{}", port)).await?;
 
         while let Ok((stream, addr)) = listener.accept().await {
-            if is_leader {
+            if is_leader_arc.load(Ordering::SeqCst) {
+                println!("Conexión de un pasajero en {}", addr.port());
                 handle_passenger_connection(stream, addr.port(), &passengers_write_half_arc, &driver)?;
-            } else {
+            }
+            else {
                 handle_leader_connection(stream, &half_write_to_leader, &driver)?;
             }
         }
@@ -776,7 +779,9 @@ impl Driver {
 
     /// Handles the new leader message, this means that i am the new leader
     pub fn handle_be_leader_as_driver(&mut self, msg: NewLeader, addr: Addr<Driver>) -> Result<(), io::Error> {
-        self.is_leader = true;
+        self.is_leader.store(true, Ordering::SeqCst);
+        println!("soy liderdddddddddddddddddddddddddddddddddddddddddd? {}", self.is_leader.load(Ordering::SeqCst));
+        self.state = States::Idle;
         self.leader_port = self.id;
         self.drivers_id = msg.drivers_id;
         self.drivers_id.retain(|&x| x != self.id);
