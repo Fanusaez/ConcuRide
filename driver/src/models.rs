@@ -129,7 +129,7 @@ pub struct NewLeader {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum RingMessage {
     Election { participants: Vec<u16> },
-    Coordinator { leader_id: u16, id_origin: u16 },
+    Coordinator { leader_id: u16, participants: Vec<u16> },
     ACK {id_origin: u16},
 }
 
