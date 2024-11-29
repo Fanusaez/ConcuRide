@@ -9,7 +9,7 @@ mod passenger;
 mod utils;
 mod models;
 
-const LEADER_PORT: u16 = 6000;
+pub const LEADER_PORT: u16 = 6003;
 
 /// Recibe un puerto y un archivo de destinos(rides) y crea el actor Pasajero
 #[actix_rt::main]

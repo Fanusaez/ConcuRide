@@ -1,8 +1,10 @@
+use std::collections::HashMap;
 use actix::Message;
 use serde::{Deserialize, Serialize};
-use tokio::io::{ReadHalf};
+use tokio::io::{ReadHalf, WriteHalf};
 use tokio::net::{TcpListener, TcpStream};
 use std::time::Instant;
+use crate::driver::DriverStatus;
 
 /// RideRequest struct, ver como se puede importar desde otro archivo, esto esta en utils.rs\
 #[derive(Serialize, Deserialize, Message, Debug, Clone, Copy)]
@@ -125,6 +127,16 @@ pub struct DeadLeader {
 pub struct NewLeader {
     pub leader_id: u16,
     pub drivers_id: Vec<u16>,
+}
+
+#[derive(Message, Debug)]
+#[rtype(result = "()")]
+pub struct NewLeaderAttributes {
+    pub active_drivers: HashMap<u16, (Option<ReadHalf<TcpStream>>, Option<WriteHalf<TcpStream>>)>,
+    pub drivers_last_position: HashMap<u16, (i32, i32)>,
+    pub drivers_status: HashMap<u16, DriverStatus>,
+    pub payment_write_half: Option<WriteHalf<TcpStream>>,
+    pub payment_read_half: Option<ReadHalf<TcpStream>>,
 }
 
 

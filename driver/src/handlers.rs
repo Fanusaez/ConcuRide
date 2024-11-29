@@ -2,7 +2,7 @@ use std::fmt::format;
 use std::io;
 use std::io::Error;
 use tokio::io::{split, AsyncBufReadExt, BufReader, AsyncWriteExt, WriteHalf, AsyncReadExt, ReadHalf};
-use actix::{Actor, AsyncContext, Context, Handler, StreamHandler};
+use actix::{Actor, AsyncContext, Context, ContextFutureSpawner, Handler, StreamHandler, WrapFuture};
 use tokio_stream::wrappers::LinesStream;
 use actix::MessageResult;
 
@@ -348,10 +348,25 @@ impl Handler<NewLeader> for Driver {
         }
         else if msg.leader_id == self.id {
             log(&format!("I AM THE NEW LEADER {}", msg.leader_id), "NEW_CONNECTION");
-            //self.handle_new_leader_as_driver(msg, ctx.address()).unwrap();
+            self.handle_be_leader_as_driver(msg, ctx.address()).unwrap();
         }
         else {
             log(&format!("NEW LEADER APPOINTED {}", msg.leader_id), "NEW_CONNECTION");
+            self.handle_new_leader_as_driver(msg).unwrap();
+        }
+    }
+}
+
+impl Handler<NewLeaderAttributes> for Driver {
+    type Result = ();
+
+    fn handle(&mut self, msg: NewLeaderAttributes, ctx: &mut Self::Context) -> Self::Result {
+        if self.is_leader {
+            log("NEW LEADER ATTRIBUTES RECEIVED", "NEW_CONNECTION");
+            self.handle_new_leader_attributes_as_leader(msg, ctx.address()).unwrap();
+        }
+        else {
+            eprintln!("Driver {} is not the leader, should not receive this message", self.id);
         }
     }
 }

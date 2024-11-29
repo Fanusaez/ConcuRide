@@ -8,6 +8,7 @@ use actix::clock::Sleep;
 use tokio::io::{split, AsyncBufReadExt, BufReader, AsyncWriteExt, WriteHalf, AsyncReadExt, ReadHalf};
 use tokio::net::{TcpListener, TcpStream};
 use std::net::{SocketAddr, UdpSocket};
+use std::sync::atomic::{AtomicBool, Ordering};
 use futures::SinkExt;
 use tokio_stream::wrappers::LinesStream;
 use actix::MessageResult;
@@ -22,16 +23,17 @@ pub struct LastPingManager {
     pub last_ping: Instant,
 }
 
-pub enum Sates {
+pub enum States {
     Driving,
     Idle,
+    LeaderLess
 }
 
-impl PartialEq for Sates {
+impl PartialEq for States{
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
-            (Sates::Driving, Sates::Driving) => true,
-            (Sates::Idle, Sates::Idle) => true,
+            (States::Driving, States::Driving) => true,
+            (States::Idle, States::Idle) => true,
             _ => false,
         }
     }
@@ -70,7 +72,7 @@ pub struct Driver {
     /// ID's of Dead Drivers
     pub dead_drivers: Vec<u16>,
     /// States of the driver
-    pub state: Sates,
+    pub state: States,
     /// Last known position of the driver (port, (x, y))
     pub drivers_last_position: HashMap<u16, (i32, i32)>,
     /// Connection to the payment app
@@ -84,7 +86,9 @@ pub struct Driver {
     /// UDP Socket for leader election
     pub socket: Arc<UdpSocket>,
     /// Driver's IDS
-    pub drivers_id: Vec<u16>
+    pub drivers_id: Vec<u16>,
+    /// para parar check_leader_alive, es para cuando siendo driver me convierto en lider. todo: ver despues
+    pub stop_pings: Arc<AtomicBool>,
 }
 
 impl Driver {
@@ -116,6 +120,7 @@ impl Driver {
 
         // TODO: Y ESTO?
         let unpaid_rides: Arc<RwLock<HashMap<u16, RideRequest>>>= Arc::new(RwLock::new(HashMap::new()));
+        let stop_pings = Arc::new(AtomicBool::new(false));
 
         // Remove the leader port from the list of drivers
         drivers_ports.remove(LIDER_PORT_IDX);
@@ -161,18 +166,19 @@ impl Driver {
                 position, // Arrancan en el origen por comodidad, ver despues que onda
                 is_leader,
                 leader_port: leader_port.clone(),
-                last_ping_by_leader: last_ping_manager.clone(),
+                last_ping_by_leader: last_ping_manager, // porque le ponian clone?
                 active_drivers: active_drivers_arc.clone(),
                 dead_drivers: Vec::new(),
                 write_half_to_leader: half_write_to_leader.clone(),
                 passengers_write_half: passengers_write_half_arc.clone(),
-                state: Sates::Idle,
+                state: States::Idle,
                 drivers_last_position,
                 payment_write_half: payment_write_half_arc.clone(),
                 drivers_status: drivers_status_arc.clone(),
                 ride_manager: RideManager::new(),
                 socket: Arc::new(socket),
                 drivers_id,
+                stop_pings: stop_pings.clone(),
 
             }
         });
@@ -180,7 +186,7 @@ impl Driver {
         let listener = TcpListener::bind(format!("127.0.0.1:{}", port)).await?;
 
         while let Ok((stream, addr)) = listener.accept().await {
-            if should_be_leader {
+            if is_leader {
                 handle_passenger_connection(stream, addr.port(), &passengers_write_half_arc, &driver)?;
             } else {
                 handle_leader_connection(stream, &half_write_to_leader, &driver)?;
@@ -195,7 +201,7 @@ impl Driver {
     /// * `ctx` - The context of the driver
     /// * `active_drivers_arc` - The arc of the active drivers
     pub fn associate_drivers_stream(
-        ctx: &mut actix::Context<Driver>,
+        ctx: &mut Context<Driver>,
         active_drivers_arc: Arc<RwLock<HashMap<u16, (Option<ReadHalf<TcpStream>>, Option<WriteHalf<TcpStream>>)>>>)
         -> Result<(), io::Error>
     {
@@ -370,15 +376,23 @@ impl Driver {
         Ok(())
     }
 
+    /// Checks if the leader is alive, if the leader stop sending pings, the driver will send an auto message
+    /// Only used by driver
     pub fn check_leader_alive(&mut self, addr: Addr<Driver>) {
         let last_ping_by_leader = self.last_ping_by_leader.clone();
         let leader_id = self.leader_port;
+        let stop_flag = self.stop_pings.clone();
 
         actix::spawn(async move {
             loop {
+                if stop_flag.load(Ordering::SeqCst) {
+                    // todo: ojo capaz que no hace falta, se corta solo abajo
+                    println!("Deteniendo la tarea de verificación de líder.");
+                    break;
+                }
                 let last_ping = last_ping_by_leader.send(GetLastPing).await.unwrap();
 
-                let now = std::time::Instant::now();
+                let now = Instant::now();
                 let elapsed = now.duration_since(last_ping).as_secs();
 
                 if elapsed > PING_TIMEOUT {
@@ -400,7 +414,7 @@ impl Driver {
     pub fn handle_ride_request_as_driver(&mut self, msg: RideRequest, addr: Addr<Self>) -> Result<(), io::Error> {
         let result = boolean_with_probability(PROBABILITY_OF_ACCEPTING_RIDE);
 
-        if result && self.state == Sates::Idle {
+        if result && self.state == States::Idle {
             log(&format!("RIDE REQUEST {} ACCEPTED", msg.id), "DRIVER");
             self.accept_ride_request(msg)?;
             self.drive_and_finish(msg, addr)?;
@@ -579,7 +593,7 @@ impl Driver {
         log(&format!("RIDE FINISHED, PASSENGER WITH ID {} HAS BEEN DROPPED OFF", msg.passenger_id), "DRIVER");
 
         // Cambiar el estado del driver a Idle
-        self.state = Sates::Idle;
+        self.state = States::Idle;
 
         // Enviar el mensaje de finalización al líder
         self.send_message_to_leader(MessageType::FinishRide(msg))?;
@@ -628,7 +642,7 @@ impl Driver {
     fn accept_ride_request(&mut self, ride_request_msg: RideRequest) -> Result<(), io::Error> {
 
         // Cambiar el estado del driver a Driving
-        self.state = Sates::Driving;
+        self.state = States::Driving;
 
         // Crear el mensaje de respuesta
         let response = AcceptRide {
@@ -760,8 +774,81 @@ impl Driver {
         Ok(())
     }
 
+    /// Handles the new leader message, this means that i am the new leader
+    pub fn handle_be_leader_as_driver(&mut self, msg: NewLeader, addr: Addr<Driver>) -> Result<(), io::Error> {
+        self.is_leader = true;
+        self.leader_port = self.id;
+        self.drivers_id = msg.drivers_id;
+        self.drivers_id.retain(|&x| x != self.id);
+        // paro de verificar los pings del lider, ya que yo soy el lider ahora
+        self.stop_pings.store(true, Ordering::SeqCst);
 
-/// ------------------------------------------- SENDING FUNCTIONS ---------------------------------------------- ///
+        let drivers_id = self.drivers_id.clone();
+        tokio::spawn(async move {
+            Self::initialize_new_leader(drivers_id, addr).await;
+        });
+        // me convierto en lider, por lo que tengo que empezar a verificar los pings de los drivers
+        //self.start_ping_system(addr);
+        // TODO: necesito parar check_leader_alive
+        Ok(())
+    }
+
+    pub fn handle_new_leader_attributes_as_leader(&mut self, msg: NewLeaderAttributes, addr: Addr<Driver>, ) -> Result<(), io::Error> {
+        self.active_drivers = Arc::new(RwLock::new(msg.active_drivers));
+        self.drivers_last_position = msg.drivers_last_position;
+        self.payment_write_half = Arc::new(RwLock::new(msg.payment_write_half));
+        self.drivers_status = Arc::new(RwLock::new(msg.drivers_status));
+
+        addr.do_send(StreamMessage{stream: msg.payment_read_half});
+
+        let mut active_drivers = self.active_drivers.write().unwrap();
+
+        for (id, (read, _)) in active_drivers.iter_mut() {
+            if let Some(read_half) = read.take() {
+                addr.do_send(StreamMessage{stream: Some(read_half)});
+            } else {
+                eprintln!("No hay un stream de lectura disponible para el conductor con id {}", id);
+            }
+        }
+
+        Ok(())
+    }
+    async fn initialize_new_leader(drivers_id: Vec<u16>, addr: Addr<Driver>) {
+        let mut drivers_id = drivers_id.clone();
+        let mut active_drivers: HashMap<u16, (Option<ReadHalf<TcpStream>>, Option<WriteHalf<TcpStream>>)> = HashMap::new();
+        let mut drivers_last_position: HashMap<u16, (i32, i32)> = HashMap::new();
+        let mut drivers_status: HashMap<u16, DriverStatus> = HashMap::new();
+
+        // Payment app and connection
+        let mut payment_write_half: Option<WriteHalf<TcpStream>> = None;
+        let mut payment_read_half: Option<ReadHalf<TcpStream>> = None;
+
+        init::init_driver(
+            &mut active_drivers,
+            drivers_id,
+            &mut drivers_last_position,
+            true,
+            &mut payment_write_half,
+            &mut payment_read_half,
+            &mut drivers_status).await.expect("TODO: panic message");
+
+        addr.do_send(NewLeaderAttributes {
+            active_drivers,
+            drivers_last_position,
+            payment_write_half,
+            payment_read_half,
+            drivers_status,
+        });
+    }
+
+    pub fn handle_new_leader_as_driver(&mut self, msg: NewLeader) -> Result<(), io::Error> {
+        self.state = States::Idle;
+        self.leader_port = msg.leader_id;
+        self.last_ping_by_leader.do_send(UpdateLastPing { time: Instant::now() });
+        Ok(())
+    }
+
+    /// ------------------------------------------- SENDING FUNCTIONS ---------------------------------------------- ///
 
     /// Driver's function
     /// Sends a message to the leader
@@ -932,6 +1019,8 @@ impl Driver {
     /// TODO: PROBLEMA: PUEDE QUE OTRO DRIVER TODAVIA NO SE HAYA DADO CUENTA QUE EL LIDER SE CAYO, Y SI ENVIO EL MENSAJE NADIE VA A LEER.
 
     pub fn handle_dead_leader_as_driver(&mut self, addr: Addr<Driver>) -> Result<(), io::Error> {
+
+        self.state = States::LeaderLess;
 
         let id = self.id;
         let socket = self.socket.clone();

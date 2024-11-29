@@ -7,10 +7,8 @@ use tokio::io::{split, AsyncBufReadExt, AsyncWriteExt, BufReader, WriteHalf};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_stream::wrappers::LinesStream;
 use tokio::net::TcpSocket;
-
+use crate::LEADER_PORT;
 use crate::models::*;
-
-const LEADER_PORT: u16 = 6000;
 
 
 pub enum Sates {
@@ -164,7 +162,7 @@ impl Passenger {
     /// * `rides` - The list of rides (coordinates) that the passenger has to go to
     /// * `tx` - The channel to send a completion signal to the main function
     pub async fn start(port_id: u16, rides: Vec<RideRequest>) -> Result<(), io::Error> {
-        let stream = TcpStream::connect(format!("127.0.0.1:{}", crate::LEADER_PORT)).await?;
+        let stream = TcpStream::connect(format!("127.0.0.1:{}", LEADER_PORT)).await?;
         let used_port = stream.local_addr()?.port();
         let rides_clone = rides.clone();
         let addr = Passenger::create_actor_instance(port_id, stream);
