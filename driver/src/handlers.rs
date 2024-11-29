@@ -4,6 +4,7 @@ use std::io::Error;
 use tokio::io::{split, AsyncBufReadExt, BufReader, AsyncWriteExt, WriteHalf, AsyncReadExt, ReadHalf};
 use actix::{Actor, AsyncContext, Context, Handler, StreamHandler};
 use tokio_stream::wrappers::LinesStream;
+use actix::MessageResult;
 
 use crate::driver::Driver;
 use crate::models::*;
@@ -352,5 +353,25 @@ impl Handler<NewLeader> for Driver {
         else {
             log(&format!("NEW LEADER APPOINTED {}", msg.leader_id), "NEW_CONNECTION");
         }
+    }
+}
+
+impl Actor for LastPingManager {
+    type Context = Context<Self>;
+}
+
+impl Handler<UpdateLastPing> for LastPingManager {
+    type Result = ();
+
+    fn handle(&mut self, msg: UpdateLastPing, _ctx: &mut Self::Context) {
+        self.last_ping = msg.time;
+    }
+}
+
+impl Handler<GetLastPing> for LastPingManager {
+    type Result = MessageResult<GetLastPing>;
+
+    fn handle(&mut self, _msg: GetLastPing, _ctx: &mut Self::Context) -> Self::Result {
+        MessageResult(self.last_ping)
     }
 }

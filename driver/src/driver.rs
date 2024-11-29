@@ -17,38 +17,8 @@ use crate::utils::*;
 use crate::ride_manager::*;
 use std::time::Instant;
 
-#[derive(Message)]
-#[rtype(result = "()")]
-pub struct UpdateLastPing {
-    pub time: Instant,
-}
-
-#[derive(Message)]
-#[rtype(result = "Instant")]
-pub struct GetLastPing;
-
 pub struct LastPingManager {
     pub last_ping: Instant,
-}
-
-impl Actor for LastPingManager {
-    type Context = Context<Self>;
-}
-
-impl Handler<UpdateLastPing> for LastPingManager {
-    type Result = ();
-
-    fn handle(&mut self, msg: UpdateLastPing, _ctx: &mut Self::Context) {
-        self.last_ping = msg.time;
-    }
-}
-
-impl Handler<GetLastPing> for LastPingManager {
-    type Result = MessageResult<GetLastPing>;
-
-    fn handle(&mut self, _msg: GetLastPing, _ctx: &mut Self::Context) -> Self::Result {
-        MessageResult(self.last_ping)
-    }
 }
 
 pub enum Sates {
