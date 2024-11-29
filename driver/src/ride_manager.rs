@@ -1,65 +1,43 @@
 use std::collections::HashMap;
-use std::io;
-use std::sync::Arc;
-use std::sync::RwLock;
-
+use std::{fs, io};
+use std::io::{ErrorKind, Write};
+use serde::{Deserialize, Serialize};
 use crate::models::*;
 
+const BACKUP_PATH: &str = "./backup.txt";
+
+#[derive(Serialize, Deserialize, Debug)]
 pub struct RideManager {
     /// Pending rides, already paid rides, waiting to be accepted by a driver
-    pub pending_rides: Arc<RwLock<HashMap<u16, RideRequest>>>,
+    pending_rides: HashMap<u16, RideRequest>,
     /// Unpaid rides, waiting for payment confirmation
-    pub unpaid_rides: Arc<RwLock<HashMap<u16, RideRequest>>>,
+    unpaid_rides: HashMap<u16, RideRequest>,
     /// Passenger last DriveRequest and the drivers who have been offered the ride
-    pub ride_and_offers: Arc<RwLock<HashMap<u16, Vec<u16>>>>,
+    pub ride_and_offers: HashMap<u16, Vec<u16>>,
     /// Already paid rides (ride_id, PaymentAccepted). It is used to send payment to the driver
     /// from the leader
-    pub paid_rides: Arc<RwLock<HashMap<u16, PaymentAccepted>>>,
+    paid_rides: HashMap<u16, PaymentAccepted>,
 }
 
 impl RideManager {
     /// Inserts a ride in the pending rides
     /// # Arguments
     /// * `msg` - The message containing the ride request
-    pub fn insert_ride_in_pending(&self, msg: RideRequest) -> Result<(), io::Error> {
+    pub fn insert_ride_in_pending(&mut self, msg: RideRequest) -> Result<(), io::Error> {
         // Lo pongo el pending_rides hasta que alguien acepte el viaje
-        let mut pending_rides = self.pending_rides.write();
-        match pending_rides {
-            Ok(mut pending_rides) => {
-                pending_rides.insert(msg.id, msg);
-            }
-            Err(e) => {
-                eprintln!("Error obtaining writing lock from `pending_rides`: {:?}", e);
-                return Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    "Error obtaining writing lock from `pending_rides`",
-                ));
-            }
-        }
+        self.pending_rides.insert(msg.id, msg);
         Ok(())
     }
 
     /// Removes ride from pending rides
     /// # Arguments
     /// * `passenger_id` - The id of the passenger
-    pub fn remove_ride_from_pending(&self, passenger_id: u16) -> Result<(), io::Error> {
-        let mut pending_rides = self.pending_rides.write();
-        match pending_rides {
-            Ok(mut pending_rides) => {
-                if pending_rides.remove(&passenger_id).is_none() {
-                    eprintln!(
-                        "RideRequest with id {} not found in pending_rides",
-                        passenger_id
-                    );
-                }
-            }
-            Err(e) => {
-                eprintln!("Error obtaining writing lock from `pending_rides`: {:?}", e);
-                return Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    "Error obtaining writing lock from `pending_rides`",
-                ));
-            }
+    pub fn remove_ride_from_pending(&mut self, passenger_id: u16) -> Result<(), io::Error> {
+        if self.pending_rides.remove(&passenger_id).is_none() {
+            eprintln!(
+                "RideRequest with id {} not found in pending_rides",
+                passenger_id
+            );
         }
         Ok(())
     }
@@ -69,107 +47,62 @@ impl RideManager {
     /// * `passenger_id` - The id of the passenger
     /// * `driver_id` - The id of the driver
     pub fn insert_in_rides_and_offers(
-        &self,
+        &mut self,
         passenger_id: u16,
         driver_id: u16,
     ) -> Result<(), io::Error> {
-        let mut ride_and_offers = self.ride_and_offers.write();
-        match ride_and_offers {
-            Ok(mut ride_and_offers) => {
-                if let Some(offers) = ride_and_offers.get_mut(&passenger_id) {
-                    offers.push(driver_id);
-                } else {
-                    ride_and_offers.insert(passenger_id, vec![driver_id]);
-                }
-            }
-            Err(e) => {
-                eprintln!(
-                    "Error obtaining writing lock from `ride_and_offers`: {:?}",
-                    e
-                );
-                return Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    "Error obtaining writing lock from `ride_and_offers`",
-                ));
-            }
+
+        if let Some(offers) = self.ride_and_offers.get_mut(&passenger_id) {
+            offers.push(driver_id);
+        } else {
+            self.ride_and_offers.insert(passenger_id, vec![driver_id]);
         }
         Ok(())
     }
 
     /// Removes the passenger id from the ride_and_offers hashmap
-    pub fn remove_from_ride_and_offers(&self, passenger_id: u16) -> Result<(), io::Error> {
-        let mut ride_and_offers = self.ride_and_offers.write();
-        match ride_and_offers {
-            Ok(mut ride_and_offers) => {
-                if ride_and_offers.remove(&passenger_id).is_none() {
-                    eprintln!(
-                        "RideRequest with id {} not found in ride_and_offers",
-                        passenger_id
-                    );
-                }
-            }
-            Err(e) => {
-                eprintln!(
-                    "Error obtaining writing lock from `ride_and_offers`: {:?}",
-                    e
-                );
-                return Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    "Error obtaining writing lock from `ride_and_offers`",
-                ));
-            }
+    pub fn remove_from_ride_and_offers(&mut self, passenger_id: u16) -> Result<(), io::Error> {
+        match self.ride_and_offers.remove(&passenger_id) {
+            Some(_) => Ok(()), // Se encontró y eliminó
+            None => Err(io::Error::new(
+                ErrorKind::NotFound,
+                format!("RideRequest with id {} not found in ride_and_offers", passenger_id),
+            )),
         }
-        Ok(())
     }
 
     /// Removes all the offers from the ride_and_offers hashmap to the passenger_id
-    pub fn remove_offers_from_ride_and_offers(&self, passenger_id: u16) -> Result<(), io::Error> {
-        let mut ride_and_offers = self.ride_and_offers.write();
-        match ride_and_offers {
-            Ok(mut ride_and_offers) => {
-                if let Some(offers) = ride_and_offers.get_mut(&passenger_id) {
-                    offers.clear();
-                }
-            },
-            Err(e) => {
-                eprintln!("Error obtaining writing lock from `ride_and_offers`: {:?}", e);
-                return Err(io::Error::new(io::ErrorKind::Other, "Error obtaining writing lock from `ride_and_offers`"));
+    pub fn remove_offers_from_ride_and_offers(&mut self, passenger_id: u16) -> Result<(), io::Error> {
+        match self.ride_and_offers.get_mut(&passenger_id){
+            Some(offers) => {
+                offers.clear();
+                Ok(())
             }
+            None => Err(io::Error::new(
+                ErrorKind::NotFound,
+                format!("RideRequest with id {} not found in ride_and_offers", passenger_id), // Interpolación correcta
+            ))
         }
-        Ok(())
+    }
+
+    /// Checks if a driver has already been offered the ride
+    pub fn driver_has_already_been_offered_ride(&self, passenger_id: u16, driver_id: u16) -> bool {
+        self.ride_and_offers
+            .get(&passenger_id)
+            .map_or(false, |drivers| drivers.contains(&driver_id))
     }
 
     /// Upon receiving a ride request, the leader will add it to the unpaid rides
     /// # Arguments
     /// * `msg` - The message containing the ride request
-    pub fn insert_unpaid_ride(&self, msg: RideRequest) -> Result<(), io::Error> {
-        let mut unpaid_rides = self.unpaid_rides.write();
-        match unpaid_rides {
-            Ok(mut unpaid_rides) => {
-                unpaid_rides.insert(msg.id, msg);
-            }
-            Err(e) => {
-                eprintln!("Error obtaining writing lock from `unpaid_rides`: {:?}", e);
-                return Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    "Error obtaining writing lock from `unpaid_rides`",
-                ));
-            }
-        }
+    pub fn insert_unpaid_ride(&mut self, msg: RideRequest) -> Result<(), io::Error> {
+        self.unpaid_rides.insert(msg.id, msg);
         Ok(())
     }
 
     /// Removes unpaid ride from the hashmap
-    pub fn remove_unpaid_ride(&self, passenger_id: u16) -> Result<RideRequest, io::Error> {
-        let mut unpaid_rides = self.unpaid_rides.write().map_err(|e| {
-            eprintln!("Error obtaining writing lock from `unpaid_rides`: {:?}", e);
-            io::Error::new(
-                io::ErrorKind::Other,
-                "Error obtaining writing lock from `unpaid_rides`",
-            )
-        })?;
-
-        if let Some(ride_request) = unpaid_rides.remove(&passenger_id) {
+    pub fn remove_unpaid_ride(&mut self, passenger_id: u16) -> Result<RideRequest, io::Error> {
+        if let Some(ride_request) = self.unpaid_rides.remove(&passenger_id) {
             Ok(ride_request)
         } else {
             eprintln!(
@@ -177,7 +110,7 @@ impl RideManager {
                 passenger_id
             );
             Err(io::Error::new(
-                io::ErrorKind::NotFound,
+                ErrorKind::NotFound,
                 "RideRequest not found in unpaid_rides",
             ))
         }
@@ -189,15 +122,7 @@ impl RideManager {
     /// # Returns
     /// * A copy of the RideRequest
     pub fn get_pending_ride_request(&self, passenger_id: u16) -> Result<RideRequest, io::Error> {
-        let pending_rides = self.pending_rides.read().map_err(|e| {
-            eprintln!("Error obtaining writing lock from `pending_rides`: {:?}", e);
-            io::Error::new(
-                io::ErrorKind::Other,
-                "Error obtaining writing lock from `pending_rides`",
-            )
-        })?;
-
-        if let Some(ride_request) = pending_rides.get(&passenger_id) {
+        if let Some(ride_request) = self.pending_rides.get(&passenger_id) {
             Ok(ride_request.clone())
         } else {
             eprintln!(
@@ -205,7 +130,7 @@ impl RideManager {
                 passenger_id
             );
             Err(io::Error::new(
-                io::ErrorKind::NotFound,
+                ErrorKind::NotFound,
                 "RideRequest not found in 'pending_rides'",
             ))
         }
@@ -219,65 +144,83 @@ impl RideManager {
     ///
     /// # Errors
     /// Returns an `io::Error` if the lock on `pending_rides` cannot be obtained.
-    pub fn has_pending_ride_request(&self, passenger_id: u16) -> Result<bool, io::Error> {
-        self.pending_rides
-            .read()
-            .map(|pending_rides| pending_rides.contains_key(&passenger_id))
-            .map_err(|_| {
-                io::Error::new(
-                    io::ErrorKind::Other,
-                    "Failed to acquire read lock on `pending_rides`",
-                )
-            })
+    pub fn has_pending_ride_request(&self, passenger_id: u16) -> bool {
+        self.pending_rides.contains_key(&passenger_id)
     }
 
     pub fn new() -> Self {
         RideManager {
-            pending_rides: Arc::new(RwLock::new(HashMap::new())),
-            unpaid_rides: Arc::new(RwLock::new(HashMap::new())),
-            ride_and_offers: Arc::new(RwLock::new(HashMap::new())),
-            paid_rides: Arc::new(RwLock::new(HashMap::new())),
+            pending_rides: HashMap::new(),
+            unpaid_rides: HashMap::new(),
+            ride_and_offers: HashMap::new(),
+            paid_rides: HashMap::new(),
         }
     }
 
     /// Inserts ride in paid_rides with the ride_id as the key and the
     /// PaymentAccepted msg as the value
     pub fn insert_ride_in_paid_rides(
-        &self,
+        &mut self,
         ride_id: u16,
         msg: PaymentAccepted,
     ) -> Result<(), io::Error> {
-        let mut rides = self.paid_rides.write().map_err(|e| {
-            eprintln!("Error obtaining write lock: {:?}", e);
-            io::Error::new(io::ErrorKind::Other, "PoisonError")
-        })?;
-        rides.insert(ride_id, msg);
+        self.paid_rides.insert(ride_id, msg);
         Ok(())
     }
 
     /// Removes PaymentAccepted with the information of the payment and returns it
-    pub fn get_ride_from_paid_rides(&self, ride_id: u16) -> Result<PaymentAccepted, io::Error> {
-        let mut paid_rides = self.paid_rides.write().map_err(|e| {
-            eprintln!(
-                "Error obtaining writing lock from `paid_rides`: {:?}",
-                e
-            );
-            io::Error::new(
-                io::ErrorKind::Other,
-                "Error writing lock from `paid_rides`",
-            )
-        })?;
-        if let Some(payment) = paid_rides.remove(&ride_id) {
-            Ok(payment)
-        } else {
-            eprintln!(
-                "PaymentAccepted with id {} not found in paid_rides",
-                ride_id
-            );
-            Err(io::Error::new(
-                io::ErrorKind::NotFound,
-                "PaymentAccepted not found in paid_rides",
-            ))
+    pub fn get_ride_from_paid_rides(&mut self, ride_id: u16) -> Result<PaymentAccepted, io::Error> {
+        match self.paid_rides.remove(&ride_id) {
+            Some(msg) => {Ok(msg)}
+            None => Err(io::Error::new(
+                ErrorKind::NotFound,
+                format!("PaymentAccepted not found for ride_id: {}", ride_id),
+            )),
+        }
+    }
+
+    /// Saves in a file the state of the rides so if the leader disconnects
+    /// the new leader can access to the information
+    /// # Arguments
+    /// * `pending_rides` - already paid rides, waiting to be accepted by a driver
+    /// * `unpaid_rides` - waiting for payment confirmation
+    /// * `ride_and_offers` - Passenger last DriveRequest and the drivers who have been offered the ride
+    /// * `paid_rides` - Already paid rides (ride_id, PaymentAccepted). It is used to send payment to the driver from the leader
+    /// * `path` - path to the file that will save the information
+    pub fn create_backup(&self, path: &str) -> Result<(), io::Error> {
+        // Serialize data to JSON
+        let json_data = serde_json::to_string_pretty(self)
+            .expect("Error serializing backup data to JSON");
+
+        // Save JSON in the file
+        let mut file = fs::File::create(path)?; // Deletes file if it already exists
+        file.write_all(json_data.as_bytes())?;
+        Ok(())
+    }
+
+    /// Loads data from JSON file and returns it in a struct
+    /// TODO: Manejar errores si el archivo no existe y acoplar al ride manager
+    /// en vez de devolverlo
+    pub fn load_backup(&self, path: &str) -> Result<RideManager, io::Error> {
+        // Read file content
+        match fs::read_to_string(path) {
+            Ok(json_data) => {
+                // Deserialize JSON to RideManager structure
+                match serde_json::from_str::<RideManager>(&json_data) {
+                    Ok(backup_data) => {
+                        println!("Backup: {:?}", backup_data);
+                        Ok(backup_data)
+                    },
+                    Err(e) => Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("Error deserializing backup data: {}", e),
+                    )),
+                }
+            }
+            Err(e) => {
+                println!("Backup non existing file: {}", e);
+                return Err(e);
+            }
         }
     }
 }
@@ -285,14 +228,13 @@ impl RideManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
     use models::RideRequest;
     use crate::models;
 
 
     #[test]
     fn test_insert_and_remove_pending_ride() {
-        let ride_manager = RideManager::new();
+        let mut ride_manager = RideManager::new();
 
         let ride_request = RideRequest {
             id: 1,
@@ -305,22 +247,21 @@ mod tests {
         // Insert ride
         assert!(ride_manager.insert_ride_in_pending(ride_request.clone()).is_ok());
         {
-            let pending_rides = ride_manager.pending_rides.read().unwrap();
-            assert!(pending_rides.contains_key(&ride_request.id));
-            assert_eq!(pending_rides.get(&ride_request.id).unwrap().id, 1);
+            assert!(ride_manager.pending_rides.contains_key(&ride_request.id));
+            assert_eq!(ride_manager.get_pending_ride_request(ride_request.id).unwrap().id, 1);
         }
 
         // Remove ride
         assert!(ride_manager.remove_ride_from_pending(ride_request.id).is_ok());
         {
-            let pending_rides = ride_manager.pending_rides.read().unwrap();
-            assert!(!pending_rides.contains_key(&ride_request.id));
+            assert!(!ride_manager.pending_rides.contains_key(&ride_request.id));
+            assert_eq!(ride_manager.has_pending_ride_request(ride_request.id), false);
         }
     }
 
     #[test]
     fn test_insert_and_clear_rides_and_offers() {
-        let ride_manager = RideManager::new();
+        let mut ride_manager = RideManager::new();
 
         let passenger_id = 1;
         let driver_id = 101;
@@ -329,24 +270,20 @@ mod tests {
         // Insert ride and offer
         assert!(ride_manager.insert_in_rides_and_offers(passenger_id, driver_id).is_ok());
         assert!(ride_manager.insert_in_rides_and_offers(passenger_id, driver_id2).is_ok());
-        {
-            let ride_and_offers = ride_manager.ride_and_offers.read().unwrap();
-            assert!(ride_and_offers.contains_key(&passenger_id));
-            assert_eq!(ride_and_offers[&passenger_id], vec![driver_id, driver_id2]);
-        }
+
+        assert!(ride_manager.ride_and_offers.contains_key(&passenger_id));
+        assert_eq!(ride_manager.ride_and_offers[&passenger_id], vec![driver_id, driver_id2]);
 
         // Clear offers
         assert!(ride_manager.remove_offers_from_ride_and_offers(passenger_id).is_ok());
-        {
-            let ride_and_offers = ride_manager.ride_and_offers.read().unwrap();
-            assert!(ride_and_offers.contains_key(&passenger_id));
-            assert!(ride_and_offers[&passenger_id].is_empty());
-        }
+        assert!(ride_manager.ride_and_offers.contains_key(&passenger_id));
+        assert!(ride_manager.ride_and_offers[&passenger_id].is_empty());
+
     }
 
     #[test]
     fn test_insert_and_remove_unpaid_ride() {
-        let ride_manager = RideManager::new();
+        let mut ride_manager = RideManager::new();
 
         let ride_request = RideRequest {
             id: 1,
@@ -357,24 +294,18 @@ mod tests {
         };
 
         // Insert unpaid ride
-        assert!(ride_manager.insert_unpaid_ride(ride_request.clone()).is_ok());
-        {
-            let unpaid_rides = ride_manager.unpaid_rides.read().unwrap();
-            assert!(unpaid_rides.contains_key(&ride_request.id));
-        }
+        assert!(ride_manager.insert_unpaid_ride(ride_request).is_ok());
+        assert!(ride_manager.unpaid_rides.contains_key(&ride_request.id));
 
         // Remove unpaid ride
         let removed_ride = ride_manager.remove_unpaid_ride(ride_request.id).unwrap();
         assert_eq!(removed_ride.id, ride_request.id);
-        {
-            let unpaid_rides = ride_manager.unpaid_rides.read().unwrap();
-            assert!(!unpaid_rides.contains_key(&ride_request.id));
-        }
+        assert!(!ride_manager.unpaid_rides.contains_key(&ride_request.id));
     }
 
     #[test]
     fn test_get_pending_ride_request() {
-        let ride_manager = RideManager::new();
+        let mut ride_manager = RideManager::new();
 
         let ride_request = RideRequest {
             id: 1,

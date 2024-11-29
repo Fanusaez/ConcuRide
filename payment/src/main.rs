@@ -1,14 +1,12 @@
 use std::env;
 use crate::payment::PaymentApp;
-use actix::prelude::*;
-use tokio::net::TcpStream;
-use tokio::io::{split, ReadHalf, WriteHalf};
-use actix::{Actor, Addr};
+//use actix::prelude::;
+use tokio::io::{split};
+use actix::{Actor};
 //use std::sync::Arc;
 //use std::sync::RwLock;
 //use std::io; 
 use tokio::net::TcpListener;
-use std::net::SocketAddr;
 
 
 mod payment;

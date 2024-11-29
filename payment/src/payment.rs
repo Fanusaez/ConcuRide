@@ -2,7 +2,7 @@ use actix::{Actor, Context, Handler, Message, Addr};
 //use tokio::net::tcp::{WriteHalf, ReadHalf};
 use std::collections::HashMap;
 use std::io::{self};
-use tokio::io::{WriteHalf, ReadHalf, AsyncReadExt, AsyncWriteExt, BufReader, AsyncBufReadExt};
+use tokio::io::{WriteHalf, ReadHalf, AsyncWriteExt, BufReader, AsyncBufReadExt};
 use tokio::net::TcpStream;
 use serde::{Serialize, Deserialize};
 use actix::StreamHandler;
@@ -62,7 +62,7 @@ impl SocketReader {
     }
 
     pub async fn start(read_half: ReadHalf<TcpStream>, addr: SocketAddr, payment_app: Addr<PaymentApp>) -> Result<(), io::Error> {
-        let addr = SocketReader::create(|ctx| {
+        SocketReader::create(|ctx| {
             SocketReader::add_stream(LinesStream::new(BufReader::new(read_half).lines()), ctx);
             SocketReader::new(addr, payment_app)
         });

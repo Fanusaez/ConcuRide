@@ -3,18 +3,24 @@ use std::collections::HashMap;
 use std::{io, thread};
 use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::time::Duration;
-use actix::{Actor, Addr, AsyncContext, StreamHandler};
+use actix::{Actor, Addr, AsyncContext, StreamHandler, Context, Handler, Message};
 use actix::clock::Sleep;
 use tokio::io::{split, AsyncBufReadExt, BufReader, AsyncWriteExt, WriteHalf, AsyncReadExt, ReadHalf};
 use tokio::net::{TcpListener, TcpStream};
 use std::net::{SocketAddr, UdpSocket};
 use futures::SinkExt;
 use tokio_stream::wrappers::LinesStream;
+use actix::MessageResult;
 
 use crate::{init, utils};
 use crate::models::*;
 use crate::utils::*;
 use crate::ride_manager::*;
+use std::time::Instant;
+
+pub struct LastPingManager {
+    pub last_ping: Instant,
+}
 
 pub enum Sates {
     Driving,
@@ -52,21 +58,21 @@ pub struct Driver {
     /// The driver's position
     pub position: (i32, i32),
     /// Whether the driver is the leader
-    pub is_leader: Arc<RwLock<bool>>,
+    pub is_leader: bool,
     /// Leader port
-    pub leader_port: Arc<RwLock<u16>>,
+    pub leader_port: u16,
     /// write half
     pub write_half_to_leader: Arc<RwLock<Option<WriteHalf<TcpStream>>>>,
     /// Liders last ping
-    pub last_ping_by_leader: Arc<RwLock<std::time::Instant>>,
+    pub last_ping_by_leader: Addr<LastPingManager>,
     /// The connections to the drivers
     pub active_drivers: Arc<RwLock<HashMap<u16, (Option<ReadHalf<TcpStream>>, Option<WriteHalf<TcpStream>>)>>>,
     /// ID's of Dead Drivers
-    pub dead_drivers: Arc<RwLock<Vec<u16>>>,
+    pub dead_drivers: Vec<u16>,
     /// States of the driver
     pub state: Sates,
     /// Last known position of the driver (port, (x, y))
-    pub drivers_last_position: Arc<RwLock<HashMap<u16, (i32, i32)>>>,
+    pub drivers_last_position: HashMap<u16, (i32, i32)>,
     /// Connection to the payment app
     pub payment_write_half: Arc<RwLock<Option<WriteHalf<TcpStream>>>>,
     /// Ride manager, contains the pending rides, unpaid rides and the rides and offers
@@ -90,13 +96,12 @@ impl Driver {
     pub async fn start(port: u16, mut drivers_ports: Vec<u16>, position: (i32, i32)) -> Result<(), io::Error> {
         // Driver-leader attributes
         let should_be_leader = port == drivers_ports[LIDER_PORT_IDX];
-        let is_leader = Arc::new(RwLock::new(should_be_leader));
-        let leader_port = Arc::new(RwLock::new(drivers_ports[LIDER_PORT_IDX].clone()));
-        let last_ping_by_leader = std::time::Instant::now();
+        let is_leader = should_be_leader;
+        let leader_port = drivers_ports[LIDER_PORT_IDX].clone();
+        let last_ping_manager = LastPingManager { last_ping: Instant::now() }.start();
 
         // Auxiliar structures
         let mut active_drivers: HashMap<u16, (Option<ReadHalf<TcpStream>>, Option<WriteHalf<TcpStream>>)> = HashMap::new();
-        let dead_drivers: Arc<RwLock<Vec<u16>>> = Arc::new(RwLock::new(Vec::new()));
         let mut drivers_last_position: HashMap<u16, (i32, i32)> = HashMap::new();
         let passengers_write_half: HashMap<u16, Option<WriteHalf<TcpStream>>> = HashMap::new();
         let mut drivers_status: HashMap<u16, DriverStatus> = HashMap::new();
@@ -126,13 +131,13 @@ impl Driver {
 
         // Arcs for shared data
         let mut active_drivers_arc = Arc::new(RwLock::new(active_drivers));
-        let mut drivers_last_position_arc = Arc::new(RwLock::new(drivers_last_position));
+        //let mut drivers_last_position_arc = Arc::new(RwLock::new(drivers_last_position));
         let mut payment_write_half_arc = Arc::new(RwLock::new(payment_write_half));
         let mut payment_read_half_arc = Arc::new(RwLock::new(payment_read_half));
         let mut passengers_write_half_arc = Arc::new(RwLock::new(passengers_write_half));
         let mut half_write_to_leader = Arc::new(RwLock::new(None));
         let mut drivers_status_arc = Arc::new(RwLock::new(drivers_status));
-        let last_ping_by_leader = Arc::new(RwLock::new(last_ping_by_leader));
+        //let last_ping_by_leader = Arc::new(RwLock::new(last_ping_by_leader));
 
         // para que funcione, no se porque
         let associate_driver_streams = Self::associate_drivers_stream;
@@ -154,15 +159,15 @@ impl Driver {
             Driver {
                 id: port,
                 position, // Arrancan en el origen por comodidad, ver despues que onda
-                is_leader: is_leader.clone(),
+                is_leader,
                 leader_port: leader_port.clone(),
-                last_ping_by_leader,
+                last_ping_by_leader: last_ping_manager.clone(),
                 active_drivers: active_drivers_arc.clone(),
-                dead_drivers,
+                dead_drivers: Vec::new(),
                 write_half_to_leader: half_write_to_leader.clone(),
                 passengers_write_half: passengers_write_half_arc.clone(),
                 state: Sates::Idle,
-                drivers_last_position: drivers_last_position_arc.clone(),
+                drivers_last_position,
                 payment_write_half: payment_write_half_arc.clone(),
                 drivers_status: drivers_status_arc.clone(),
                 ride_manager: RideManager::new(),
@@ -347,8 +352,7 @@ impl Driver {
             id_receiver: msg.id_sender,
         };
         // Update last ping time of leader
-        let mut last_ping = self.last_ping_by_leader.write().unwrap();
-        *last_ping = std::time::Instant::now();
+        self.last_ping_by_leader.do_send(UpdateLastPing { time: Instant::now() });
 
         // Resend ping (PONG)
         self.send_message_to_leader(MessageType::Ping(response))?;
@@ -368,17 +372,11 @@ impl Driver {
 
     pub fn check_leader_alive(&mut self, addr: Addr<Driver>) {
         let last_ping_by_leader = self.last_ping_by_leader.clone();
-        let leader_id = {
-            let guard = self.leader_port.read().unwrap();
-            *guard
-        };
+        let leader_id = self.leader_port;
 
         actix::spawn(async move {
             loop {
-                let last_ping = {
-                    let guard = last_ping_by_leader.read().unwrap();
-                    *guard
-                };
+                let last_ping = last_ping_by_leader.send(GetLastPing).await.unwrap();
 
                 let now = std::time::Instant::now();
                 let elapsed = now.duration_since(last_ping).as_secs();
@@ -421,7 +419,7 @@ impl Driver {
 
         // Si ya hay un RideRequest en proceso, se ignora
         // TODO: quizas deberiamos prohibir esto en el pasajero
-        if self.ride_manager.has_pending_ride_request(msg.id)? {
+        if self.ride_manager.has_pending_ride_request(msg.id) {
             // Ignorar si ya hay un RideRequest en proceso
             return Ok(());
         }
@@ -594,18 +592,15 @@ impl Driver {
     /// In case the dead driver was offered a ride and not responded, sends auto decline message, so the RideRequest can be sent to another driver
     pub fn handle_dead_driver_as_leader(&mut self, addr: Addr<Self>, msg: DeadDriver) -> Result<(), io::Error> {
         let mut active_drivers = self.active_drivers.write().unwrap();
-        let mut dead_drivers = self.dead_drivers.write().unwrap();
-        let mut ride_and_offers = self.ride_manager.ride_and_offers.write().unwrap();
-        let mut last_positions = self.drivers_last_position.write().unwrap();
 
         let dead_driver_id = msg.driver_id;
 
         active_drivers.remove(&dead_driver_id);
-        dead_drivers.push(dead_driver_id);
-        last_positions.remove(&dead_driver_id);
+        self.dead_drivers.push(dead_driver_id);
+        self.drivers_last_position.remove(&dead_driver_id);
 
         // verificar si en ride and offers se encuentra el driver en ultima posicion de un viaje
-        for (passenger_id, drivers_id) in ride_and_offers.iter_mut() {
+        for (passenger_id, drivers_id) in self.ride_manager.ride_and_offers.iter_mut() {
             if let Some(last_driver) = drivers_id.last() {
                 // si el ultimo id al que se le ofrecio el viaje es el driver muerto
                 // finjo una respuesta del driver muerto
@@ -729,8 +724,7 @@ impl Driver {
 
     /// Handles the PositionUpdate message from the driver
     pub fn handle_position_update_as_leader(&mut self, msg: PositionUpdate) -> Result<(), io::Error> {
-        let mut positions = self.drivers_last_position.write().unwrap();
-        positions.insert(msg.driver_id, msg.position);
+        self.drivers_last_position.insert(msg.driver_id, msg.position);
         Ok(())
     }
 
@@ -749,7 +743,7 @@ impl Driver {
     /// * `passenger_id` - The id of the passenger
     pub fn verify_pending_ride_request(&self, passenger_id: u16) -> Result<(), io::Error> {
         // Verificar si hay una solicitud pendiente
-        let has_pending = self.ride_manager.has_pending_ride_request(passenger_id)?;
+        let has_pending = self.ride_manager.has_pending_ride_request(passenger_id);
 
         if !has_pending {
             return Ok(());
@@ -895,7 +889,7 @@ impl Driver {
         Ok(())
     }
 
-/// -------------------------------------------  AUXILIARY FUNCTIONS ------------------------------------------- ///
+    /// -------------------------------------------  AUXILIARY FUNCTIONS ------------------------------------------- ///
 
 
     /// Returns the id to the closest driver to the passenger that has not been already offered the ride
@@ -908,18 +902,16 @@ impl Driver {
         // PickUp position
         let (x_passenger, y_passenger) = (message.x_origin as i32, message.y_origin as i32);
 
-        let drivers_last_position = self.drivers_last_position.read().unwrap();
         let mut closest_driver = 0;
         let mut min_distance = i32::MAX;
 
-        let offers_and_rides = self.ride_manager.ride_and_offers.read().unwrap();
+        //let offers_and_rides = self.ride_manager.ride_and_offers.read().unwrap();
 
 
-        for (driver_id, (x_driver, y_driver)) in drivers_last_position.iter() {
+        for (driver_id, (x_driver, y_driver)) in self.drivers_last_position.iter() {
 
             // Si el driver que estoy viendo ya fue ofrecido el viaje, lo salteo
-            // TODO: VER MANEJO DE ERRORES
-            if offers_and_rides.contains_key(&message.id) && offers_and_rides.get(&message.id).unwrap().contains(driver_id) {
+            if self.ride_manager.driver_has_already_been_offered_ride(message.id, *driver_id) {
                 continue;
             }
 

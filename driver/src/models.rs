@@ -2,6 +2,7 @@ use actix::Message;
 use serde::{Deserialize, Serialize};
 use tokio::io::{ReadHalf};
 use tokio::net::{TcpListener, TcpStream};
+use std::time::Instant;
 
 /// RideRequest struct, ver como se puede importar desde otro archivo, esto esta en utils.rs\
 #[derive(Serialize, Deserialize, Message, Debug, Clone, Copy)]
@@ -132,6 +133,16 @@ pub enum RingMessage {
     Coordinator { leader_id: u16, participants: Vec<u16> },
     ACK {id_origin: u16},
 }
+
+#[derive(Message)]
+#[rtype(result = "()")]
+pub struct UpdateLastPing {
+    pub time: Instant,
+}
+
+#[derive(Message)]
+#[rtype(result = "Instant")]
+pub struct GetLastPing;
 
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(tag = "message_type")]
