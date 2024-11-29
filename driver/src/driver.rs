@@ -3,17 +3,53 @@ use std::collections::HashMap;
 use std::{io, thread};
 use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::time::Duration;
-use actix::{Actor, Addr, AsyncContext, StreamHandler};
+use actix::{Actor, Addr, AsyncContext, StreamHandler, Context, Handler, Message};
 use actix::clock::Sleep;
 use tokio::io::{split, AsyncBufReadExt, BufReader, AsyncWriteExt, WriteHalf, AsyncReadExt, ReadHalf};
 use tokio::net::{TcpListener, TcpStream};
 use std::net::{SocketAddr, UdpSocket};
 use tokio_stream::wrappers::LinesStream;
+use actix::MessageResult;
 
 use crate::{init, utils};
 use crate::models::*;
 use crate::utils::*;
 use crate::ride_manager::*;
+use std::time::Instant;
+
+#[derive(Message)]
+#[rtype(result = "()")]
+pub struct UpdateLastPing {
+    pub time: Instant,
+}
+
+#[derive(Message)]
+#[rtype(result = "Instant")]
+pub struct GetLastPing;
+
+pub struct LastPingManager {
+    pub last_ping: Instant,
+}
+
+impl Actor for LastPingManager {
+    type Context = Context<Self>;
+}
+
+impl Handler<UpdateLastPing> for LastPingManager {
+    type Result = ();
+
+    fn handle(&mut self, msg: UpdateLastPing, _ctx: &mut Self::Context) {
+        self.last_ping = msg.time;
+    }
+}
+
+impl Handler<GetLastPing> for LastPingManager {
+    type Result = MessageResult<GetLastPing>;
+
+    fn handle(&mut self, _msg: GetLastPing, _ctx: &mut Self::Context) -> Self::Result {
+        MessageResult(self.last_ping)
+    }
+}
 
 pub enum Sates {
     Driving,
@@ -56,7 +92,7 @@ pub struct Driver {
     /// write half
     pub write_half_to_leader: Arc<RwLock<Option<WriteHalf<TcpStream>>>>,
     /// Liders last ping
-    pub last_ping_by_leader: Arc<RwLock<std::time::Instant>>,
+    pub last_ping_by_leader: Addr<LastPingManager>,
     /// The connections to the drivers
     pub active_drivers: Arc<RwLock<HashMap<u16, (Option<ReadHalf<TcpStream>>, Option<WriteHalf<TcpStream>>)>>>,
     /// ID's of Dead Drivers
@@ -90,7 +126,7 @@ impl Driver {
         let should_be_leader = port == drivers_ports[LIDER_PORT_IDX];
         let is_leader = should_be_leader;
         let leader_port = drivers_ports[LIDER_PORT_IDX].clone();
-        let last_ping_by_leader = std::time::Instant::now();
+        let last_ping_manager = LastPingManager { last_ping: Instant::now() }.start();
 
         // Auxiliar structures
         let mut active_drivers: HashMap<u16, (Option<ReadHalf<TcpStream>>, Option<WriteHalf<TcpStream>>)> = HashMap::new();
@@ -129,7 +165,7 @@ impl Driver {
         let mut passengers_write_half_arc = Arc::new(RwLock::new(passengers_write_half));
         let mut half_write_to_leader = Arc::new(RwLock::new(None));
         let mut drivers_status_arc = Arc::new(RwLock::new(drivers_status));
-        let last_ping_by_leader = Arc::new(RwLock::new(last_ping_by_leader));
+        //let last_ping_by_leader = Arc::new(RwLock::new(last_ping_by_leader));
 
         // para que funcione, no se porque
         let associate_driver_streams = Self::associate_drivers_stream;
@@ -153,7 +189,7 @@ impl Driver {
                 position, // Arrancan en el origen por comodidad, ver despues que onda
                 is_leader,
                 leader_port: leader_port.clone(),
-                last_ping_by_leader,
+                last_ping_by_leader: last_ping_manager.clone(),
                 active_drivers: active_drivers_arc.clone(),
                 dead_drivers: Vec::new(),
                 write_half_to_leader: half_write_to_leader.clone(),
@@ -344,8 +380,7 @@ impl Driver {
             id_receiver: msg.id_sender,
         };
         // Update last ping time of leader
-        let mut last_ping = self.last_ping_by_leader.write().unwrap();
-        *last_ping = std::time::Instant::now();
+        self.last_ping_by_leader.do_send(UpdateLastPing { time: Instant::now() });
 
         // Resend ping (PONG)
         self.send_message_to_leader(MessageType::Ping(response))?;
@@ -369,10 +404,7 @@ impl Driver {
 
         actix::spawn(async move {
             loop {
-                let last_ping = {
-                    let guard = last_ping_by_leader.read().unwrap();
-                    *guard
-                };
+                let last_ping = last_ping_by_leader.send(GetLastPing).await.unwrap();
 
                 let now = std::time::Instant::now();
                 let elapsed = now.duration_since(last_ping).as_secs();
@@ -885,7 +917,7 @@ impl Driver {
         Ok(())
     }
 
-/// -------------------------------------------  AUXILIARY FUNCTIONS ------------------------------------------- ///
+    /// -------------------------------------------  AUXILIARY FUNCTIONS ------------------------------------------- ///
 
 
     /// Returns the id to the closest driver to the passenger that has not been already offered the ride
