@@ -348,7 +348,7 @@ impl Handler<NewLeader> for Driver {
         }
         else if msg.leader_id == self.id {
             log(&format!("I AM THE NEW LEADER {}", msg.leader_id), "NEW_CONNECTION");
-            // TODO: self.handle_new_leader_as_driver(msg, ctx.address()).unwrap();
+            //self.handle_new_leader_as_driver(msg, ctx.address()).unwrap();
         }
         else {
             log(&format!("NEW LEADER APPOINTED {}", msg.leader_id), "NEW_CONNECTION");

@@ -120,10 +120,11 @@ pub struct DeadLeader {
     pub leader_id: u16,
 }
 
-#[derive(Serialize, Deserialize, Message, Debug, Clone, Copy)]
+#[derive(Serialize, Deserialize, Message, Debug, Clone)]
 #[rtype(result = "()")]
 pub struct NewLeader {
     pub leader_id: u16,
+    pub drivers_id: Vec<u16>,
 }
 
 

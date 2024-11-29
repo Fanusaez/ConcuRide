@@ -942,13 +942,15 @@ impl Driver {
         let got_ack = Arc::new((Mutex::new(None), Condvar::new()));
         let leader_id =  Arc::new((Mutex::new(None), Condvar::new()));
         //let drivers_id_arc = Arc::new(RwLock::new(drivers_id));
+        let drivers_id_for_leader = Arc::new(RwLock::new(Vec::new()));
 
         // Lanzar un hilo para el proceso de elección
         let thread_stop = stop.clone();
         let thread_leader_id = leader_id.clone();
+        let drivers_id_for_leader_clone = drivers_id_for_leader.clone();
 
         thread::spawn(move || {
-            Self::receive(id, socket, stop_clone, got_ack, leader_id, drivers_id);
+            Self::receive(id, socket, stop_clone, got_ack, leader_id, drivers_id, drivers_id_for_leader_clone);
         });
 
         // Esperar a que se elija un nuevo líder
@@ -959,8 +961,11 @@ impl Driver {
                 leader_guard = cvar.wait(leader_guard).unwrap();
             }
 
+            // obtengo los drivers en caso de que sea lider
+            let drivers_id: Vec<u16>  = drivers_id_for_leader.read().unwrap().clone();
+
             if let Some(new_leader) = *leader_guard {
-                addr.do_send(NewLeader { leader_id: new_leader });
+                addr.do_send(NewLeader { leader_id: new_leader, drivers_id });
 
                 // Detener la ejecución del proceso de elección
                 let (stop_lock, stop_cvar) = &*thread_stop;
@@ -978,7 +983,8 @@ impl Driver {
                 stop: Arc<(Mutex<bool>, Condvar)>,
                 got_ack: Arc<(Mutex<Option<u16>>, Condvar)>,
                 leader_id_cond: Arc<(Mutex<Option<u16>>, Condvar)>,
-                drivers_id: Vec<u16>) {
+                drivers_id: Vec<u16>,
+                drivers_id_for_leader: Arc<RwLock<Vec<u16>>>) {
 
         //tokio::time::sleep(Duration::from_secs(2)); // Provisorio para evitar colisiones iniciales
         let initial_msg = RingMessage::Election { participants: vec![id] };
@@ -1033,6 +1039,12 @@ impl Driver {
                     }
 
                     if participants.contains(&id) {
+                        // Guardo los drivers que participaron de la eleccion
+                        {
+                            let mut drivers_id_for_leader = drivers_id_for_leader.write().unwrap();
+                            *drivers_id_for_leader = participants.clone();
+                        }
+
                         println!("ENVIANDO MENSAJE DE COORDINADOR");
                         let leader_id = *participants.iter().max().unwrap();
                         let mut participants_election = Vec::new();
