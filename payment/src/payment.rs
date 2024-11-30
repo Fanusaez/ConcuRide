@@ -1,5 +1,4 @@
 use actix::{Actor, Context, Handler, Message, Addr};
-//use tokio::net::tcp::{WriteHalf, ReadHalf};
 use std::collections::HashMap;
 use std::io::{self};
 use tokio::io::{WriteHalf, ReadHalf, AsyncWriteExt, BufReader, AsyncBufReadExt};
@@ -11,6 +10,7 @@ use tokio::sync::RwLock;
 use std::net::SocketAddr;
 use tokio_stream::wrappers::LinesStream;
 use rand::Rng;
+use colored::Colorize;
 
 const PROBABILITY_PAYMENT_REJECTED: f64 = 0.01;
 
@@ -74,8 +74,6 @@ impl SocketReader {
 impl StreamHandler<Result<String, io::Error>> for SocketReader {
     fn handle(&mut self, read: Result<String, io::Error>, _ctx: &mut Self::Context) {
         if let Ok(line) = read {
-
-            println!("Mensaje de {}: {}", self.addr, line);
 
             let message: MessageType = serde_json::from_str(&line).expect("Failed to deserialize message");
             match message {
@@ -177,13 +175,13 @@ impl Handler<SendPayment> for PaymentApp {
     fn handle(&mut self, msg: SendPayment, _: &mut Self::Context) {
         if self.payment_is_accepted() {
             let payment_accepted = PaymentAccepted{id: msg.id, amount: msg.amount};
-            println!("Pago accepted");
+            log(&format!("PAYMENT ACCEPTED FOR RIDE {}", msg.id), "NEW_CONNECTION");
             self.rides_and_payments.insert(msg.id, msg.amount); //Lo agrego a los viajes aceptados
             self.writer.do_send(payment_accepted);
         }
         else {
             let payment_rejected = PaymentRejected{id:msg.id};
-            println!("Payment rejected");
+            log(&format!("PAYMENT REJECTED FOR RIDE {}", msg.id), "DISCONNECTION");;
             self.writer.do_send(payment_rejected);
         }
     }
@@ -207,77 +205,12 @@ impl PaymentApp {
 
 
 
-
-
-
-
-
-
-/*
-// Mensaje para configurar el escritor en PaymentApp
-#[derive(Message)]
-#[rtype(result = "()")]
-pub struct SetWriter(Addr<SocketWriter>);
-
-impl Handler<SetWriter> for PaymentApp {
-    type Result = ();
-    
-    fn handle(&mut self, msg: SetWriter, _: &mut Context<Self>) {
-        self.writer = Some(msg.0);
+pub fn log(message: &str, type_msg: &str) {
+    match type_msg {
+        "DRIVER" => println!("[{}] - {}", type_msg, message.blue().bold()),
+        "INFO" => println!("[{}] - {}", type_msg, message.cyan().bold()),
+        "DISCONNECTION" => println!("[{}] - {}", type_msg, message.red().bold()), // disc = disconnection
+        "NEW_CONNECTION" => println!("[{}] - {}", type_msg, message.green().bold()), // nc = no connection
+        _ => println!("[{}] - {}", type_msg, message.green().bold()),
     }
 }
-*/
-
-/*
-pub struct PaymentApp {
-    rides_and_payments: HashMap<u16, u16>,
-    write_half: Option<WriteHalf<TcpStream>>,
-    read_half: Option<ReadHalf<TcpStream>>,
-}
-
-impl Actor for PaymentApp {
-    type Context = Context<Self>;
-}
-
-impl PaymentApp {
-    pub async fn new(port: u16, leader_port: u16) -> Result<Self, Box<dyn std::error::Error>> {
-        let stream = TcpStream::connect(format!("127.0.0.1:{}", leader_port)).await?;
-        let (r_half, w_half) = split(stream);
-        Ok(PaymentApp { rides_and_payments: HashMap::new(), read_half: Some(r_half), write_half: Some(w_half) })
-    }
-    
-    pub fn send_message(&mut self, message: MessageType) -> Result<(), io::Error> {
-        let serialized = serde_json::to_string(&message)?;
-        self.write_half.write_all(format!("{}\n", serialized).as_bytes())?;
-        Ok(())
-    }
-}
-
-impl Handler<SendPayment> for PaymentApp {
-    type Result = ();
-    
-    fn handle(&mut self, msg: SendPayment, _ctx: &mut Self::Context) {
-        
-}
-}
-
-impl StreamHandler<Result<String, io::Error>> for PaymentApp {
-    /// Handles the messages coming from the associated stream.
-    /// Matches the message type and sends it to the corresponding handler.
-    fn handle(&mut self, read: Result<String, io::Error>, ctx: &mut Self::Context) {
-        if let Ok(line) = read {
-            let message: MessageType = serde_json::from_str(&line).expect("Failed to deserialize message");
-            match message {
-                MessageType::SendPayment(payment)=> {
-                    ctx.address().do_send(payment);
-                }
-                _ => {
-                    println!("Failed to read message");
-                } 
-            }
-        } else {
-            println!("[{:?}] Failed to read line {:?}", self.id, read);
-        }
-    }
-}
-*/

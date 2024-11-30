@@ -31,7 +31,7 @@ async fn main() -> std::io::Result<()> {
 
     while let Ok((stream, addr)) = listener.accept().await {
         let (read_half, write_half) = split(stream);
-        println!("[{:?}] Cliente conectado", addr);
+        payment::log("NEW CLIENT CONNECTED", "NEW_CONNECTION");
         // Creo el socket writer (encargado de recibir los mensajes de payment app y enviarlos
         // por socket al conductor lider)
         let writer_addr = SocketWriter::new(write_half).start();
@@ -43,11 +43,5 @@ async fn main() -> std::io::Result<()> {
         SocketReader::start(read_half, addr, payment_app_addr).await?;
     }
 
-    println!("b1");
-
     Ok(())
-
-
-    //PaymentApp::new(port, LEADER_PORT);
-    //Ok(())
 }
