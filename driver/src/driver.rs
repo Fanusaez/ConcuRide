@@ -312,7 +312,6 @@ impl Driver {
             loop {
                 {
                     let mut drivers = drivers_status.write().unwrap();
-                    println!("Sending ping to driver");
                     for (driver_id, status) in drivers.iter_mut() {
                         if status.is_alive {
                             addr.do_send(SendPingTo { id_to_send: *driver_id });
@@ -781,7 +780,7 @@ impl Driver {
         self.drivers_id = msg.drivers_id;
         self.drivers_id.retain(|&x| x != self.id);
 
-        let addr_clone = addr.clone();
+        self.connect_to_passengers_as_new_leader(addr.clone())?;
 
         let drivers_id = self.drivers_id.clone();
         tokio::spawn(async move {
@@ -790,29 +789,6 @@ impl Driver {
         Ok(())
     }
 
-    pub fn handle_new_leader_attributes_as_leader(&mut self, msg: NewLeaderAttributes, addr: Addr<Driver>, ) -> Result<(), io::Error> {
-        self.active_drivers = Arc::new(RwLock::new(msg.active_drivers));
-        self.drivers_last_position = msg.drivers_last_position;
-        self.payment_write_half = Arc::new(RwLock::new(msg.payment_write_half));
-        self.drivers_status = Arc::new(RwLock::new(msg.drivers_status));
-
-        addr.do_send(StreamMessage{stream: msg.payment_read_half});
-
-        let mut active_drivers = self.active_drivers.write().unwrap();
-
-        for (id, (read, _)) in active_drivers.iter_mut() {
-            if let Some(read_half) = read.take() {
-                addr.do_send(StreamMessage{stream: Some(read_half)});
-            } else {
-                eprintln!("No hay un stream de lectura disponible para el conductor con id {}", id);
-            }
-        }
-
-        // me convierto en lider, por lo que tengo que empezar a verificar los pings de los drivers
-        self.start_ping_system(addr);
-
-        Ok(())
-    }
     async fn initialize_new_leader(drivers_id: Vec<u16>, addr: Addr<Driver>) {
         let mut drivers_id = drivers_id.clone();
         let mut active_drivers: HashMap<u16, (Option<ReadHalf<TcpStream>>, Option<WriteHalf<TcpStream>>)> = HashMap::new();
@@ -842,11 +818,68 @@ impl Driver {
 
     }
 
+    pub fn handle_new_leader_attributes_as_leader(&mut self, msg: NewLeaderAttributes, addr: Addr<Driver>, ) -> Result<(), io::Error> {
+        self.active_drivers = Arc::new(RwLock::new(msg.active_drivers));
+        self.drivers_last_position = msg.drivers_last_position;
+        self.payment_write_half = Arc::new(RwLock::new(msg.payment_write_half));
+        self.drivers_status = Arc::new(RwLock::new(msg.drivers_status));
+
+        addr.do_send(StreamMessage{stream: msg.payment_read_half});
+
+        let mut active_drivers = self.active_drivers.write().unwrap();
+
+        for (id, (read, _)) in active_drivers.iter_mut() {
+            if let Some(read_half) = read.take() {
+                addr.do_send(StreamMessage{stream: Some(read_half)});
+            } else {
+                eprintln!("No hay un stream de lectura disponible para el conductor con id {}", id);
+            }
+        }
+
+        // TODO: esto no deberia estar aca, deberia hacerse en una funcion/mensaje aparte
+        self.start_ping_system(addr);
+
+        Ok(())
+    }
+
     pub fn handle_new_leader_as_driver(&mut self, msg: NewLeader, addr: Addr<Driver>) -> Result<(), io::Error> {
+        // todo: esta bien que pase a idle?
         self.state = States::Idle;
         self.leader_port = msg.leader_id;
         self.last_ping_by_leader.do_send(UpdateLastPing { time: Instant::now() });
+        // reinicio el chequeo del lider dado que se paro para la eleccion
         self.check_leader_alive(addr);
+        Ok(())
+    }
+
+    fn connect_to_passengers_as_new_leader(&self, addr: Addr<Driver>) -> Result<(), io::Error> {
+        let passengers_id = self.passengers_id.clone();
+        let leader_id = self.id;
+        tokio::spawn(async move {
+            for passenger_id in passengers_id {
+                // puede pasar que el driver no este conectado
+                let stream = match TcpStream::connect(format!("127.0.0.1:{}", passenger_id)).await {
+                    Ok(stream) => stream,
+                    Err(e) => {
+                        eprintln!("Error al conectar con el pasajero {}: {:?}", passenger_id, e);
+                        continue;
+                    }
+                };
+                let (read, mut write) = split(stream);
+                // envio read, write y id para agregarlo
+                addr.do_send(NewPassengerConnection { passenger_id, read, write });
+            }
+        });
+
+        Ok(())
+    }
+
+    /// Guarda stream de escritura de un pasajero en el hash y manda un mensaje para guardar el stream de lectura
+    /// nombre se puede prestar a confusion, todo: cambiar despues
+    pub fn handle_new_passenger_connection_as_leader(&mut self, msg: NewPassengerConnection, addr: Addr<Driver>) -> Result<(), io::Error> {
+        let mut passengers_write_half = self.passengers_write_half.write().unwrap();
+        passengers_write_half.insert(msg.passenger_id, Some(msg.write));
+        addr.do_send(StreamMessage{stream: Some(msg.read)});
         Ok(())
     }
 

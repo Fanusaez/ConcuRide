@@ -1,5 +1,7 @@
 use actix::Message;
 use serde::{Deserialize, Serialize};
+use tokio::io::{ReadHalf, WriteHalf};
+use tokio::net::TcpStream;
 
 // Struct que representa las coordenadas de un viaje.
 #[derive(Serialize, Deserialize, Debug, Clone, Message)]
@@ -53,6 +55,13 @@ pub struct NewConnection {
 pub struct RideRequestReconnection {
     pub passenger_id: u16,
     pub state: String,
+}
+
+#[derive(Message, Debug)]
+#[rtype(result = "()")]
+pub struct NewLeaderStreams {
+    pub read: Option<ReadHalf<TcpStream>>,
+    pub write_half: Option<WriteHalf<TcpStream>>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]

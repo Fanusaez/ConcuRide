@@ -260,15 +260,22 @@ impl Handler<NewConnection> for Driver {
     }
 }
 
+/// Used when new leader is elected and leader need to reconnect with the passengers and inform new leader
+impl Handler<NewPassengerConnection> for Driver {
+    type Result = ();
+
+    fn handle(&mut self, msg: NewPassengerConnection, _ctx: &mut Self::Context) -> Self::Result {
+        self.handle_new_passenger_connection_as_leader(msg, _ctx.address()).unwrap();
+    }
+}
+
 impl Handler<Ping> for Driver {
     type Result = ();
 
     fn handle(&mut self, msg: Ping, _ctx: &mut Self::Context) -> Self::Result {
         if self.is_leader.load(Ordering::SeqCst) {
-            println!("Recibi ping de {}", msg.id_sender);
             self.handle_ping_as_leader(msg).unwrap();
         } else {
-            println!("Recibi ping del lider {}", msg.id_sender);
             self.handle_ping_as_driver(msg).unwrap();
         }
     }

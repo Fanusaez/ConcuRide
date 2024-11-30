@@ -1,13 +1,15 @@
 use std::cmp::PartialEq;
 use std::hash::Hash;
 use std::io;
+use std::thread::sleep;
 use actix::{Actor, Context, StreamHandler, ActorFutureExt, Handler, Addr, AsyncContext};
 use actix_async_handler::async_handler;
 use tokio::io::{split, AsyncBufReadExt, AsyncWriteExt, BufReader, WriteHalf};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_stream::wrappers::LinesStream;
 use tokio::net::TcpSocket;
-use crate::LEADER_PORT;
+use tokio::net::unix::pid_t;
+use crate::{utils, LEADER_PORT};
 use crate::models::*;
 
 
@@ -46,6 +48,13 @@ pub struct Passenger {
 
 impl Actor for Passenger {
     type Context = Context<Self>;
+
+    fn stopping(&mut self, _: &mut Self::Context) -> actix::Running {
+        // Evita que el actor muera mientras tenga streams activos
+        // TODO: puse esta condicion rando, se podria poner otra que sea mas logica
+        actix::Running::Continue
+    }
+
 }
 
 /// Handles incoming messages from the leader
@@ -98,10 +107,16 @@ impl Handler<RideRequest> for Passenger {
 impl Handler<FinishRide> for Passenger {
     type Result = ();
 
-    fn handle(&mut self, msg: FinishRide, _ctx: &mut Self::Context) -> Self::Result {
+    fn handle(&mut self, msg: FinishRide, ctx: &mut Self::Context) -> Self::Result {
         println!("Passenger with id {} finished ride with driver {}", msg.passenger_id, msg.driver_id);
         self.state = Sates::Idle;
-        // TODO: hay que ver como manejarse aca, podria el pasajero leer su vector de rides y procesarlos? o solo 1 ride por pasajero
+        let addr = ctx.address();
+        if let Some(ride) = self.rides.pop() {
+            tokio::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+                addr.do_send(ride)
+            });
+        }
     }
 }
 
@@ -130,6 +145,22 @@ impl Handler<NewConnection> for Passenger {
             Ok(_) => (),
             Err(_) => println!("Error al enviar mensaje al TcpSender"),
         }
+    }
+}
+
+impl Handler<NewLeaderStreams> for Passenger {
+    type Result = ();
+    fn handle(&mut self, msg: NewLeaderStreams, _ctx: &mut Self::Context) -> Self::Result {
+        utils::log("NEW LEADER APPOINTED", "INFO");
+        if let Some(read_half) = msg.read {
+            Passenger::add_stream(LinesStream::new(BufReader::new(read_half).lines()), _ctx);
+        } else {
+            eprintln!("No se proporcionó un stream válido");
+        }
+        let write = msg.write_half;
+        let addr_tcp = TcpSender::new(write).start();
+        self.tcp_sender = addr_tcp;
+
     }
 }
 
@@ -185,9 +216,18 @@ impl Passenger {
 
         /// Aca entrara solo cuando se caiga el lider, y un nuevo lider queira restablecer la conexion
         while let Ok((stream,  _)) = listener.accept().await {
+
             // TODO: cuando implemente mensajes, deberia escribirle al pasajero que se
             // cayo el antiguo lider y que se conecto uno nuevo
             // Deberia pasar el nuevo stream como un mensaje de actor, creo que en discord preguntaron
+            let (read, mut write) = split(stream);
+
+            // agrego el stream del nuevo lider
+            addr.send(NewLeaderStreams {
+                read: Some(read),
+                write_half: Some(write),
+            }).await.unwrap();
+
         }
 
         Ok(())

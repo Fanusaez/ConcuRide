@@ -129,6 +129,12 @@ pub struct NewLeader {
     pub drivers_id: Vec<u16>,
 }
 
+#[derive(Serialize, Deserialize, Message, Debug, Clone)]
+#[rtype(result = "()")]
+pub struct PassengerNewLeader {
+    pub leader_id: u16,
+}
+
 #[derive(Message, Debug)]
 #[rtype(result = "()")]
 pub struct NewLeaderAttributes {
@@ -137,6 +143,14 @@ pub struct NewLeaderAttributes {
     pub drivers_status: HashMap<u16, DriverStatus>,
     pub payment_write_half: Option<WriteHalf<TcpStream>>,
     pub payment_read_half: Option<ReadHalf<TcpStream>>,
+}
+
+#[derive(Message, Debug)]
+#[rtype(result = "()")]
+pub struct NewPassengerConnection {
+    pub passenger_id: u16,
+    pub write: WriteHalf<TcpStream>,
+    pub read: ReadHalf<TcpStream>,
 }
 
 
@@ -176,4 +190,5 @@ pub enum MessageType {
     PayRide(PayRide),
     DeadDriver(DeadDriver),
     DeadLeader(DeadLeader),
+    PassengerNewLeader(PassengerNewLeader),
 }
