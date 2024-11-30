@@ -64,6 +64,10 @@ pub struct NewLeaderStreams {
     pub write_half: Option<WriteHalf<TcpStream>>,
 }
 
+#[derive(Message, Debug)]
+#[rtype(result = "()")]
+pub struct StopActor;
+
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(tag = "message_type")]
 /// enum Message used to deserialize

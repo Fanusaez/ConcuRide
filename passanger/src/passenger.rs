@@ -2,7 +2,7 @@ use std::cmp::PartialEq;
 use std::hash::Hash;
 use std::io;
 use std::thread::sleep;
-use actix::{Actor, Context, StreamHandler, ActorFutureExt, Handler, Addr, AsyncContext};
+use actix::{Actor, Context, StreamHandler, ActorFutureExt, Handler, Addr, AsyncContext, ActorContext};
 use actix_async_handler::async_handler;
 use tokio::io::{split, AsyncBufReadExt, AsyncWriteExt, BufReader, WriteHalf};
 use tokio::net::{TcpListener, TcpStream};
@@ -158,6 +158,7 @@ impl Handler<NewLeaderStreams> for Passenger {
             eprintln!("No se proporcionó un stream válido");
         }
         let write = msg.write_half;
+        self.tcp_sender.do_send(StopActor);
         let addr_tcp = TcpSender::new(write).start();
         self.tcp_sender = addr_tcp;
 
@@ -311,5 +312,12 @@ impl Handler<NewConnection> for TcpSender {
         }.await;
 
         self.write = Some(ret_write);
+    }
+}
+
+impl Handler<StopActor> for TcpSender {
+    type Result = ();
+    fn handle(&mut self, msg: StopActor, ctx: &mut Self::Context) -> Self::Result {
+        ctx.stop();
     }
 }
