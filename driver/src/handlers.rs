@@ -265,8 +265,10 @@ impl Handler<Ping> for Driver {
 
     fn handle(&mut self, msg: Ping, _ctx: &mut Self::Context) -> Self::Result {
         if self.is_leader.load(Ordering::SeqCst) {
+            println!("Recibi ping de {}", msg.id_sender);
             self.handle_ping_as_leader(msg).unwrap();
         } else {
+            println!("Recibi ping del lider {}", msg.id_sender);
             self.handle_ping_as_driver(msg).unwrap();
         }
     }
@@ -353,7 +355,7 @@ impl Handler<NewLeader> for Driver {
         }
         else {
             log(&format!("NEW LEADER APPOINTED {}", msg.leader_id), "NEW_CONNECTION");
-            self.handle_new_leader_as_driver(msg).unwrap();
+            self.handle_new_leader_as_driver(msg, ctx.address()).unwrap();
         }
     }
 }

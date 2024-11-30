@@ -15,12 +15,11 @@ pub async fn init_driver(drivers_connections: &mut HashMap<u16, (Option<ReadHalf
                     payment_read_half: &mut Option<ReadHalf<TcpStream>>,
                     drivers_status: &mut HashMap<u16, DriverStatus>) -> Result<(), io::Error> {
 
-    // Inicializo cosas que necesito para ambos
-    for driver_port in drivers_ports.iter() {
-        drivers_status.insert(*driver_port, DriverStatus{last_response: Some(std::time::Instant::now()), is_alive: true});
-    }
 
     if is_leader {
+        for driver_port in drivers_ports.iter() {
+            drivers_status.insert(*driver_port, DriverStatus{last_response: Some(std::time::Instant::now()), is_alive: true});
+        }
         for driver_port in drivers_ports.iter() {
             let stream = TcpStream::connect(format!("127.0.0.1:{}", driver_port)).await?;
             let (read_half, write_half) = split(stream);

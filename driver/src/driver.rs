@@ -87,8 +87,8 @@ pub struct Driver {
     pub socket: Arc<UdpSocket>,
     /// Driver's IDS
     pub drivers_id: Vec<u16>,
-    /// para parar check_leader_alive, es para cuando siendo driver me convierto en lider. todo: ver despues
-    pub stop_pings: Arc<AtomicBool>,
+    /// Pasajeros que se van a conectar
+    pub passengers_id: Vec<u16>,
 }
 
 impl Driver {
@@ -104,6 +104,8 @@ impl Driver {
         let is_leader_arc = Arc::new(AtomicBool::new(is_leader));
         let leader_port = drivers_ports[LIDER_PORT_IDX].clone();
         let last_ping_manager = LastPingManager { last_ping: Instant::now() }.start();
+        let mut passengers_id = Vec::new();
+        passengers_id.push(9000);
 
         // Auxiliar structures
         let mut active_drivers: HashMap<u16, (Option<ReadHalf<TcpStream>>, Option<WriteHalf<TcpStream>>)> = HashMap::new();
@@ -179,7 +181,7 @@ impl Driver {
                 ride_manager: RideManager::new(),
                 socket: Arc::new(socket),
                 drivers_id,
-                stop_pings: stop_pings.clone(),
+                passengers_id,
 
             }
         });
@@ -300,17 +302,17 @@ impl Driver {
 /// ------------------------------------------------------------------ PING IMPLEMENTATION ---------------------------------------------------- ///
 
 
-    /// Starts the ping system
+    /// Starts the ping system, only used by leader
     /// In a loop sends pings to the drivers
     /// # Arguments
     /// * `addr` - The address of the driver
     pub fn start_ping_system(&self, addr: Addr<Driver>) {
         let mut drivers_status = self.drivers_status.clone();
-
         tokio::spawn(async move {
             loop {
                 {
                     let mut drivers = drivers_status.write().unwrap();
+                    println!("Sending ping to driver");
                     for (driver_id, status) in drivers.iter_mut() {
                         if status.is_alive {
                             addr.do_send(SendPingTo { id_to_send: *driver_id });
@@ -384,15 +386,9 @@ impl Driver {
     pub fn check_leader_alive(&mut self, addr: Addr<Driver>) {
         let last_ping_by_leader = self.last_ping_by_leader.clone();
         let leader_id = self.leader_port;
-        let stop_flag = self.stop_pings.clone();
 
         actix::spawn(async move {
             loop {
-                if stop_flag.load(Ordering::SeqCst) {
-                    // todo: ojo capaz que no hace falta, se corta solo abajo
-                    println!("Deteniendo la tarea de verificación de líder.");
-                    break;
-                }
                 let last_ping = last_ping_by_leader.send(GetLastPing).await.unwrap();
 
                 let now = Instant::now();
@@ -780,21 +776,17 @@ impl Driver {
     /// Handles the new leader message, this means that i am the new leader
     pub fn handle_be_leader_as_driver(&mut self, msg: NewLeader, addr: Addr<Driver>) -> Result<(), io::Error> {
         self.is_leader.store(true, Ordering::SeqCst);
-        println!("soy liderdddddddddddddddddddddddddddddddddddddddddd? {}", self.is_leader.load(Ordering::SeqCst));
         self.state = States::Idle;
         self.leader_port = self.id;
         self.drivers_id = msg.drivers_id;
         self.drivers_id.retain(|&x| x != self.id);
-        // paro de verificar los pings del lider, ya que yo soy el lider ahora
-        self.stop_pings.store(true, Ordering::SeqCst);
+
+        let addr_clone = addr.clone();
 
         let drivers_id = self.drivers_id.clone();
         tokio::spawn(async move {
             Self::initialize_new_leader(drivers_id, addr).await;
         });
-        // me convierto en lider, por lo que tengo que empezar a verificar los pings de los drivers
-        //self.start_ping_system(addr);
-        // TODO: necesito parar check_leader_alive
         Ok(())
     }
 
@@ -815,6 +807,9 @@ impl Driver {
                 eprintln!("No hay un stream de lectura disponible para el conductor con id {}", id);
             }
         }
+
+        // me convierto en lider, por lo que tengo que empezar a verificar los pings de los drivers
+        self.start_ping_system(addr);
 
         Ok(())
     }
@@ -844,12 +839,14 @@ impl Driver {
             payment_read_half,
             drivers_status,
         });
+
     }
 
-    pub fn handle_new_leader_as_driver(&mut self, msg: NewLeader) -> Result<(), io::Error> {
+    pub fn handle_new_leader_as_driver(&mut self, msg: NewLeader, addr: Addr<Driver>) -> Result<(), io::Error> {
         self.state = States::Idle;
         self.leader_port = msg.leader_id;
         self.last_ping_by_leader.do_send(UpdateLastPing { time: Instant::now() });
+        self.check_leader_alive(addr);
         Ok(())
     }
 
