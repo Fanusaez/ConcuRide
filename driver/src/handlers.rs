@@ -6,7 +6,7 @@ use tokio::io::{split, AsyncBufReadExt, BufReader, AsyncWriteExt, WriteHalf, Asy
 use actix::{Actor, AsyncContext, Context, ContextFutureSpawner, Handler, StreamHandler, WrapFuture};
 use tokio_stream::wrappers::LinesStream;
 use actix::MessageResult;
-
+use log::*;
 use crate::driver::Driver;
 use crate::models::*;
 use crate::driver::*;
@@ -274,8 +274,10 @@ impl Handler<Ping> for Driver {
 
     fn handle(&mut self, msg: Ping, _ctx: &mut Self::Context) -> Self::Result {
         if self.is_leader.load(Ordering::SeqCst) {
+            info!("{}", format!("PING RECEIVED FROM DRIVER {}", msg.id_sender));
             self.handle_ping_as_leader(msg).unwrap();
         } else {
+            info!("{}", format!("PING RECEIVED FROM LEADER {}", msg.id_sender));
             self.handle_ping_as_driver(msg).unwrap();
         }
     }
