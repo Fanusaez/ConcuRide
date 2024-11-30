@@ -91,7 +91,7 @@ impl Handler<RideRequest> for Passenger {
 
     fn handle(&mut self, msg: RideRequest, _ctx: &mut Self::Context) -> Self::Result {
         if self.state == Sates::Idle {
-            println!("Passenger with id {} requested a ride", self.id);
+            utils::log(&format!("PASSENGER WITH ID {} REQUESTED A RIDE", self.id), "INFO");
             self.state = Sates::WaitingDriver;
             match self.tcp_sender.try_send(msg) {
                 Ok(_) => (),
@@ -108,7 +108,7 @@ impl Handler<FinishRide> for Passenger {
     type Result = ();
 
     fn handle(&mut self, msg: FinishRide, ctx: &mut Self::Context) -> Self::Result {
-        println!("Passenger with id {} finished ride with driver {}", msg.passenger_id, msg.driver_id);
+        utils::log(&format!("PASSENGER WITH ID {} FINISHED RIDE WITH DRIVER {}", msg.passenger_id, msg.driver_id), "INFO");
         self.state = Sates::Idle;
         let addr = ctx.address();
         if let Some(ride) = self.rides.pop() {
@@ -127,14 +127,16 @@ impl Handler<DeclineRide> for Passenger {
     fn handle(&mut self, msg: DeclineRide, _ctx: &mut Self::Context) -> Self::Result {
         println!("Passenger with id {} got declined message from Leader {}", msg.passenger_id, msg.driver_id);
         self.state = Sates::Idle;
-        // TODO: hay que ver como manejarse aca, podria el pasajero leer su vector de rides y procesarlos? o solo 1 ride por pasajero
     }
 }
 
 impl Handler<PaymentRejected> for Passenger {
     type Result = ();
 
-    fn handle(&mut self, msg: PaymentRejected, _ctx: &mut Self::Context) -> Self::Result {}
+    fn handle(&mut self, msg: PaymentRejected, _ctx: &mut Self::Context) -> Self::Result {
+        utils::log(&format!("PASSENGER WITH ID {} PAYMENT WAS REJECTED", self.id), "INFO");
+        self.state = Sates::Idle;
+    }
 }
 
 impl Handler<NewConnection> for Passenger {
@@ -151,7 +153,7 @@ impl Handler<NewConnection> for Passenger {
 impl Handler<NewLeaderStreams> for Passenger {
     type Result = ();
     fn handle(&mut self, msg: NewLeaderStreams, _ctx: &mut Self::Context) -> Self::Result {
-        utils::log("NEW LEADER APPOINTED", "INFO");
+        utils::log("NEW LEADER APPOINTED", "CONNECTION");
         if let Some(read_half) = msg.read {
             Passenger::add_stream(LinesStream::new(BufReader::new(read_half).lines()), _ctx);
         } else {
@@ -168,7 +170,7 @@ impl Handler<RideRequestReconnection> for Passenger {
     type Result = ();
 
     fn handle(&mut self, msg: RideRequestReconnection, _ctx: &mut Self::Context) -> Self::Result {
-        println!("Reconnected, RideRequest in progress");
+        utils::log("RIDE REQUEST RECONNECTED", "INFO");
         match msg.state.as_str() {
             "Idle" => {
                 self.state = Sates::Idle;
