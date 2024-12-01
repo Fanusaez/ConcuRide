@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::{fs, io};
 use std::io::{ErrorKind, Write};
+use log::debug;
 use serde::{Deserialize, Serialize};
 use crate::models::*;
 
@@ -34,7 +35,7 @@ impl RideManager {
     /// * `passenger_id` - The id of the passenger
     pub fn remove_ride_from_pending(&mut self, passenger_id: u16) -> Result<(), io::Error> {
         if self.pending_rides.remove(&passenger_id).is_none() {
-            eprintln!(
+            debug!(
                 "RideRequest with id {} not found in pending_rides",
                 passenger_id
             );
@@ -105,7 +106,7 @@ impl RideManager {
         if let Some(ride_request) = self.unpaid_rides.remove(&passenger_id) {
             Ok(ride_request)
         } else {
-            eprintln!(
+            debug!(
                 "RideRequest with id {} not found in unpaid_rides",
                 passenger_id
             );
@@ -125,7 +126,7 @@ impl RideManager {
         if let Some(ride_request) = self.pending_rides.get(&passenger_id) {
             Ok(ride_request.clone())
         } else {
-            eprintln!(
+            debug!(
                 "RideRequest with id {} not found in pending_rides",
                 passenger_id
             );

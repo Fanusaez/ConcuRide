@@ -19,7 +19,7 @@ use crate::models::*;
 use crate::utils::*;
 use crate::ride_manager::*;
 use std::time::Instant;
-use log::info;
+use log::{debug, info};
 
 pub struct LastPingManager {
     pub last_ping: Instant,
@@ -219,7 +219,7 @@ impl Driver {
             if let Some(read_half) = read.take() {
                 Driver::add_stream(LinesStream::new(BufReader::new(read_half).lines()), ctx);
             } else {
-                eprintln!("No hay un stream de lectura disponible para el conductor con id {}", id);
+                debug!("No hay un stream de lectura disponible para el conductor con id {}", id);
             }
         }
         Ok(())
@@ -238,7 +238,7 @@ impl Driver {
         if let Some(payment_read_half) = payment_read_half.take() {
             Driver::add_stream(LinesStream::new(BufReader::new(payment_read_half).lines()), ctx);
         } else {
-            eprintln!("No hay un stream de lectura disponible para el servicio de pagos");
+            debug!("No hay un stream de lectura disponible para el servicio de pagos");
         }
         Ok(())
     }
@@ -266,10 +266,10 @@ impl Driver {
         if driver.connected() {
             match driver.try_send(StreamMessage { stream: Some(read) }) {
                 Ok(_) => {}
-                Err(e) => eprintln!("Error al enviar el stream al actorrrrr: {:?}", e),
+                Err(e) => debug!("Error al enviar el stream al actorrrrr: {:?}", e),
             }
         } else {
-            eprintln!("El actor Driver ya no está activo.");
+            debug!("El actor Driver ya no está activo.");
         }
         Ok(())
     }
@@ -290,7 +290,7 @@ impl Driver {
         match driver.try_send(StreamMessage { stream: Some(read) }) {
             Ok(_) => {}
             Err(e) => {
-                eprintln!("Error al enviar el stream al actor: {:?}", e);
+                debug!("Error al enviar el stream al actor: {:?}", e);
             }
         }
 
@@ -321,7 +321,6 @@ impl Driver {
 
                             // si esta muerto, me automando un mesnaje
                             if !update_driver_status(status, *driver_id) {
-                                println!("Driver {} is dead", driver_id);
                                 addr.do_send(DeadDriver { driver_id: *driver_id });
                             }
                         }
@@ -344,7 +343,7 @@ impl Driver {
         let driver_status = match drivers_status.get_mut(&driver_id) {
             Some(status) => status,
             None => {
-                eprintln!("Error: No se encontró el estado del driver con id {}", driver_id);
+                debug!("Error: No se encontró el estado del driver con id {}", driver_id);
                 return Ok(());
             }
         };
@@ -528,7 +527,7 @@ impl Driver {
     pub fn handle_accept_ride_as_leader(&mut self, msg: AcceptRide) -> Result<(), io::Error> {
         // Remove the passenger ID from ride_and_offers in case the passenger wants to take another ride
         if let Err(e) = self.ride_manager.remove_from_ride_and_offers(msg.passenger_id) {
-            eprintln!(
+            debug!(
                 "Error removing passenger ID {} from ride_and_offers: {:?}",
                 msg.passenger_id, e
             );
@@ -583,7 +582,7 @@ impl Driver {
                 self.send_payment_to_driver(msg.driver_id, pay_ride_msg)?;
             }
             // todo: no encuentra porque se cambio de lider (esta bien asi?)
-            Err(e) => eprintln!("Error getting payment from paid rides: {:?}", e),
+            Err(e) => debug!("Error getting payment from paid rides: {:?}", e),
         }
 
         Ok(())
@@ -847,7 +846,7 @@ impl Driver {
             if let Some(read_half) = read.take() {
                 addr.do_send(StreamMessage{stream: Some(read_half)});
             } else {
-                eprintln!("No hay un stream de lectura disponible para el conductor con id {}", id);
+                debug!("No hay un stream de lectura disponible para el conductor con id {}", id);
             }
         }
 
@@ -876,7 +875,7 @@ impl Driver {
                 let stream = match TcpStream::connect(format!("127.0.0.1:{}", passenger_id)).await {
                     Ok(stream) => stream,
                     Err(e) => {
-                        eprintln!("Error al conectar con el pasajero {}: {:?}", passenger_id, e);
+                        debug!("Error al conectar con el pasajero {}: {:?}", passenger_id, e);
                         continue;
                     }
                 };
@@ -913,10 +912,10 @@ impl Driver {
 
             if let Some(write_half) = write_guard.as_mut() {
                 if let Err(e) = write_half.write_all(format!("{}\n", serialized).as_bytes()).await {
-                    eprintln!("Error al enviar el mensaje al lider");
+                    debug!("Error al enviar el mensaje al lider");
                 }
             } else {
-                eprintln!("No se pudo enviar el mensaje: no hay conexión activa");
+                debug!("No se pudo enviar el mensaje: no hay conexión activa");
             }
         });
 
@@ -933,10 +932,10 @@ impl Driver {
 
             if let Some(write_half) = write_guard.as_mut() {
                 if let Err(e) = write_half.write_all(format!("{}\n", serialized).as_bytes()).await {
-                    eprintln!("Error al enviar el mensaje: {:?}", e);
+                    debug!("Error al enviar el mensaje: {:?}", e);
                 }
             } else {
-                eprintln!("No se pudo enviar el mensaje: no hay conexión activa");
+                debug!("No se pudo enviar el mensaje: no hay conexión activa");
             }
         });
 
@@ -959,7 +958,7 @@ impl Driver {
             let mut passengers_half_write = match passengers_write_half_clone.write() {
                 Ok(guard) => guard,
                 Err(e) => {
-                    eprintln!("Error al obtener el lock de escritura en `active_drivers`: {:?}", e);
+                    debug!("Error al obtener el lock de escritura en `active_drivers`: {:?}", e);
                     return;
                 }
             };
@@ -968,20 +967,20 @@ impl Driver {
                 let serialized = match serde_json::to_string(&message) {
                     Ok(s) => s,
                     Err(e) => {
-                        eprintln!("Error serializando el mensaje: {:?}", e);
+                        debug!("Error serializando el mensaje: {:?}", e);
                         return;
                     }
                 };
 
                 if let Some(write_half) = write_half.as_mut() {
                     if let Err(e) = write_half.write_all(format!("{}\n", serialized).as_bytes()).await {
-                        eprintln!("Error al enviar el mensaje: {:?}", e);
+                        debug!("Error al enviar el mensaje: {:?}", e);
                     }
                 } else {
-                    eprintln!("No se pudo enviar el mensaje: no hay conexión activa");
+                    debug!("No se pudo enviar el mensaje: no hay conexión activa");
                 }
             } else {
-                eprintln!("No se encontró un `write_half` para el `driver_id_to_send` especificado");
+                debug!("No se encontró un `write_half` para el `driver_id_to_send` especificado");
             }
         });
         Ok(())
@@ -998,7 +997,7 @@ impl Driver {
             let mut active_drivers = match active_drivers_clone.write() {
                 Ok(guard) => guard,
                 Err(e) => {
-                    eprintln!("Error al obtener el lock de escritura en `active_drivers`: {:?}", e);
+                    debug!("Error al obtener el lock de escritura en `active_drivers`: {:?}", e);
                     return;
                 }
             };
@@ -1007,20 +1006,20 @@ impl Driver {
                 let serialized = match serde_json::to_string(&msg) {
                     Ok(s) => s,
                     Err(e) => {
-                        eprintln!("Error serializando el mensaje: {:?}", e);
+                        debug!("Error serializando el mensaje: {:?}", e);
                         return;
                     }
                 };
 
                 if let Some(write_half) = write_half.as_mut() {
                     if let Err(e) = write_half.write_all(format!("{}\n", serialized).as_bytes()).await {
-                        eprintln!("Error al enviar el mensaje: {:?}", e);
+                        debug!("Error al enviar el mensaje: {:?}", e);
                     }
                 } else {
-                    eprintln!("No se pudo enviar el mensaje: no hay conexión activa");
+                    debug!("No se pudo enviar el mensaje: no hay conexión activa");
                 }
             } else {
-                eprintln!("No se encontró un `write_half` para el `driver_id_to_send` especificado");
+                debug!("No se encontró un `write_half` para el `driver_id_to_send` especificado");
             }
         });
         Ok(())
@@ -1144,7 +1143,7 @@ impl Driver {
             let (len, addr) = match socket.recv_from(&mut buf) {
                 Ok(result) => result,
                 Err(e) => {
-                    eprintln!("Error al recibir mensaje: {}", e);
+                    debug!("Error al recibir mensaje: {}", e);
                     break;
                 }
             };
@@ -1152,7 +1151,7 @@ impl Driver {
             let message: RingMessage = match serde_json::from_slice(&buf[..len]) {
                 Ok(msg) => msg,
                 Err(e) => {
-                    eprintln!("Error al deserializar el mensaje: {}", e);
+                    debug!("Error al deserializar el mensaje: {}", e);
                     break;
                 }
             };
@@ -1162,7 +1161,7 @@ impl Driver {
                     let (lock, cvar) = &*got_ack;
                     {
                         let mut got_ack = lock.lock().unwrap_or_else(|poisoned| {
-                            eprintln!("Lock poisoned, recovering: {:?}", poisoned);
+                            debug!("Lock poisoned, recovering: {:?}", poisoned);
                             poisoned.into_inner()
                         });
                         *got_ack = Some(id_origin);
@@ -1174,7 +1173,7 @@ impl Driver {
                     let ack_msg = RingMessage::ACK { id_origin: id };
                     let serialized_ack = serde_json::to_vec(&ack_msg).unwrap();
                     if let Err(e) = socket.send_to(&serialized_ack, addr) {
-                        eprintln!("Error al enviar mensaje de ack: {}", e);
+                        debug!("Error al enviar mensaje de ack: {}", e);
                     }
 
                     if participants.contains(&id) {
@@ -1195,7 +1194,7 @@ impl Driver {
                         let msg = serde_json::to_vec(&msg_to_send).unwrap();
                         // TODO: ver aca, en el codgio de la practica se envia para atras
                         if let Err(e) = socket.send_to(&msg, addr) {
-                            eprintln!("Error al enviar mensaje de ack: {}", e);
+                            debug!("Error al enviar mensaje de ack: {}", e);
                         }
 
                     } else {
@@ -1223,7 +1222,7 @@ impl Driver {
                     let ack_msg = RingMessage::ACK { id_origin: id };
                     let serialized_ack = serde_json::to_vec(&ack_msg).unwrap();
                     if let Err(e) = socket.send_to(&serialized_ack, addr) {
-                        eprintln!("Error al enviar mensaje de ack: {}", e);
+                        debug!("Error al enviar mensaje de ack: {}", e);
                     }
 
                     if !participants.contains(&id) {
@@ -1267,7 +1266,7 @@ impl Driver {
         //println!("Enviando mensaje a {}", next_id);
         // Enviar el mensaje
         if let Err(e) = socket.send_to(&msg, &target_address) {
-            eprintln!("Error enviando mensaje a {}: {}", next_id, e);
+            debug!("Error enviando mensaje a {}: {}", next_id, e);
             return;
         }
 
