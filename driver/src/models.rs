@@ -71,6 +71,12 @@ pub struct StreamMessage {
     pub stream: Option<ReadHalf<TcpStream>>,
 }
 
+#[derive(Message, Debug)]
+#[rtype(result = "()")]
+pub struct WriteHalfLeader {
+    pub write_half: Option<WriteHalf<TcpStream>>,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Message)]
 #[rtype(result = "()")]
 pub struct NewConnection {

@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::{io, thread};
 use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::time::Duration;
-use actix::{Actor, Addr, AsyncContext, StreamHandler, Context, Handler, Message};
+use actix::{Actor, Addr, AsyncContext, StreamHandler, Context, Handler, Message, WrapFuture};
 use actix::clock::Sleep;
 use tokio::io::{split, AsyncBufReadExt, BufReader, AsyncWriteExt, WriteHalf, AsyncReadExt, ReadHalf};
 use tokio::net::{TcpListener, TcpStream};
@@ -13,6 +13,7 @@ use std::thread::sleep;
 use futures::SinkExt;
 use tokio_stream::wrappers::LinesStream;
 use actix::MessageResult;
+use actix::prelude::*;
 
 use crate::{init, utils};
 use crate::models::*;
@@ -66,7 +67,7 @@ pub struct Driver {
     /// Leader port
     pub leader_port: u16,
     /// write half
-    pub write_half_to_leader: Arc<RwLock<Option<WriteHalf<TcpStream>>>>,
+    pub write_half_to_leader: Option<WriteHalf<TcpStream>>,
     /// Liders last ping
     pub last_ping_by_leader: Addr<LastPingManager>,
     /// The connections to the drivers
@@ -146,7 +147,6 @@ impl Driver {
         let mut payment_write_half_arc = Arc::new(RwLock::new(payment_write_half));
         let mut payment_read_half_arc = Arc::new(RwLock::new(payment_read_half));
         let mut passengers_write_half_arc = Arc::new(RwLock::new(passengers_write_half));
-        let mut half_write_to_leader = Arc::new(RwLock::new(None));
         let mut drivers_status_arc = Arc::new(RwLock::new(drivers_status));
         //let last_ping_by_leader = Arc::new(RwLock::new(last_ping_by_leader));
 
@@ -175,7 +175,7 @@ impl Driver {
                 last_ping_by_leader: last_ping_manager, // porque le ponian clone?
                 active_drivers: active_drivers_arc.clone(),
                 dead_drivers: Vec::new(),
-                write_half_to_leader: half_write_to_leader.clone(),
+                write_half_to_leader: None,
                 passengers_write_half: passengers_write_half_arc.clone(),
                 state: States::Idle,
                 drivers_last_position,
@@ -197,7 +197,7 @@ impl Driver {
                 handle_passenger_connection(stream, addr.port(), &passengers_write_half_arc, &driver)?;
             }
             else {
-                handle_leader_connection(stream, &half_write_to_leader, &driver)?;
+                handle_leader_connection(stream, &driver)?;
             }
         }
         Ok(())
@@ -230,7 +230,7 @@ impl Driver {
     /// * `ctx` - The context of the driver
     /// * `payment_read_half_arc` - The arc of the payment read half
     pub fn associate_payment_stream(
-        ctx: &mut actix::Context<Driver>,
+        ctx: &mut Context<Driver>,
         payment_read_half_arc: Arc<RwLock<Option<ReadHalf<TcpStream>>>>)
         -> Result<(), io::Error> {
         let mut payment_read_half = payment_read_half_arc.write().unwrap();
@@ -281,21 +281,36 @@ impl Driver {
     /// * `driver` - The address of the driver
     fn handle_leader_connection(
         stream: TcpStream,
-        half_write_to_leader: &Arc<RwLock<Option<WriteHalf<TcpStream>>>>,
-        driver: &Addr<Driver>,
+        addr: &Addr<Driver>,
     ) -> Result<(), io::Error> {
         let (read, write) = split(stream);
 
         // Agregar el stream de lectura al actor
-        match driver.try_send(StreamMessage { stream: Some(read) }) {
+        match addr.try_send(StreamMessage { stream: Some(read) }) {
             Ok(_) => {}
             Err(e) => {
                 debug!("Error al enviar el stream al actor: {:?}", e);
             }
         }
 
-        // Guardar el WriteHalf del líder
-        half_write_to_leader.write().unwrap().replace(write);
+        // Agregar el stream de lectura al actor
+        match addr.try_send(WriteHalfLeader { write_half: Some(write) }) {
+            Ok(_) => {}
+            Err(e) => {
+                debug!("Error al enviar el stream al actor: {:?}", e);
+            }
+        }
+
+        Ok(())
+    }
+
+    /// utilizado en el inicio para asociar el stream al lider
+    pub fn handle_write_half_leader_as_driver(&mut self, msg: WriteHalfLeader) -> Result<(), io::Error> {
+        if let Some(write_half) = msg.write_half {
+            self.write_half_to_leader = Some(write_half);
+        } else {
+            eprintln!("No se proporcionó un write half válido para la conexion con el líder");
+        }
         Ok(())
     }
 
@@ -358,7 +373,7 @@ impl Driver {
     /// This is a response Ping from a driver
     /// # Arguments
     /// * `msg` - The message containing the ping
-    pub fn handle_ping_as_driver(&mut self, msg: Ping) -> Result<(), io::Error> {
+    pub fn handle_ping_as_driver(&mut self, msg: Ping, ctx: &mut Context<Self>) -> Result<(), io::Error> {
         let response = Ping {
             id_sender: self.id,
             id_receiver: msg.id_sender,
@@ -367,7 +382,7 @@ impl Driver {
         self.last_ping_by_leader.do_send(UpdateLastPing { time: Instant::now() });
 
         // Resend ping (PONG)
-        self.send_message_to_leader(MessageType::Ping(response))?;
+        self.send_message_to_leader(MessageType::Ping(response), ctx)?;
         Ok(())
     }
 
@@ -411,16 +426,16 @@ impl Driver {
     ///Handles the ride request from the leader as a driver
     /// # Arguments
     /// * `msg` - The message containing the ride request
-    pub fn handle_ride_request_as_driver(&mut self, msg: RideRequest, addr: Addr<Self>) -> Result<(), io::Error> {
+    pub fn handle_ride_request_as_driver(&mut self, msg: RideRequest, addr: Addr<Self>, ctx: &mut Context<Self>) -> Result<(), io::Error> {
         let result = boolean_with_probability(PROBABILITY_OF_ACCEPTING_RIDE);
 
         if result && self.state == States::Idle {
             log(&format!("RIDE REQUEST {} ACCEPTED", msg.id), "DRIVER");
-            self.accept_ride_request(msg)?;
+            self.accept_ride_request(msg, ctx)?;
             self.drive_and_finish(msg, addr)?;
         } else {
             log(&format!("RIDE REQUEST {} REJECTED", msg.id), "DRIVER");
-            self.decline_ride_request(msg)?;
+            self.decline_ride_request(msg, ctx)?;
         }
         Ok(())
 
@@ -596,13 +611,13 @@ impl Driver {
     /// Finish the ride, send the FinishRide message to the leader
     /// # Arguments
     /// * `msg` - The message containing the ride request
-    pub fn handle_finish_ride_as_driver(&mut self, msg: FinishRide, addr: Addr<Driver>) -> Result<(), io::Error> {
+    pub fn handle_finish_ride_as_driver(&mut self, msg: FinishRide, addr: Addr<Driver>, ctx: &mut Context<Self>) -> Result<(), io::Error> {
         log(&format!("RIDE FINISHED, PASSENGER WITH ID {} HAS BEEN DROPPED OFF", msg.passenger_id), "DRIVER");
 
         // Cambiar el estado del driver a Idle
         if self.state != States::LeaderLess {
             self.state = States::Idle;
-            self.send_message_to_leader(MessageType::FinishRide(msg))?;
+            self.send_message_to_leader(MessageType::FinishRide(msg), ctx)?;
         }
         // no tengo lider, va a dormir  seg y ver si ya hay lider autoenviandose el mismo mensaje
         // todo: ver si es correcto esto
@@ -653,7 +668,7 @@ impl Driver {
     /// Sends the AcceptRide message to the leader
     /// # Arguments
     /// * `msg` - The message containing the ride request
-    fn accept_ride_request(&mut self, ride_request_msg: RideRequest) -> Result<(), io::Error> {
+    fn accept_ride_request(&mut self, ride_request_msg: RideRequest, ctx: &mut Context<Self>) -> Result<(), io::Error> {
 
         // Cambiar el estado del driver a Driving
         self.state = States::Driving;
@@ -668,7 +683,7 @@ impl Driver {
         let accept_msg = MessageType::AcceptRide(response);
 
         // Enviar el mensaje de aceptacion de manera asíncrona
-        self.send_message_to_leader(accept_msg)?;
+        self.send_message_to_leader(accept_msg, ctx)?;
 
         Ok(())
     }
@@ -677,7 +692,7 @@ impl Driver {
     /// Sends the DeclineRide message to the leader
     /// # Arguments
     /// * `msg` - The message containing the ride request
-    fn decline_ride_request(&self, msg: RideRequest) -> Result<(), io::Error> {
+    fn decline_ride_request(&mut self, msg: RideRequest, ctx: &mut Context<Self>) -> Result<(), io::Error> {
 
         // Crear el mensaje de respuesta
         let response = DeclineRide {
@@ -689,7 +704,7 @@ impl Driver {
         let msg_type = MessageType::DeclineRide(response);
 
         // Enviar el mensaje de manera asíncrona
-        self.send_message_to_leader(msg_type)?;
+        self.send_message_to_leader(msg_type, ctx)?;
 
         Ok(())
     }
@@ -702,8 +717,8 @@ impl Driver {
     fn drive_and_finish(&mut self, ride_request_msg: RideRequest, addr: Addr<Self>) -> Result<(), io::Error> {
         let msg_clone = ride_request_msg.clone();
         let driver_id = self.id.clone();
+        // todo: ver duracion, lo hardcodee abajo
         let duration = calculate_travel_duration(&msg_clone);
-        let write_half = Arc::clone(&self.write_half_to_leader);
 
         actix::spawn(async move {
             let mut current_position = (msg_clone.x_origin, msg_clone.y_origin);
@@ -746,10 +761,10 @@ impl Driver {
         Ok(())
     }
 
-    pub fn handle_position_update_as_driver(&mut self, msg: PositionUpdate) -> Result<(), io::Error> {
+    pub fn handle_position_update_as_driver(&mut self, msg: PositionUpdate, ctx: &mut Context<Self>) -> Result<(), io::Error> {
         // si no tengo lider no actualizo mi posicion
         if self.state != States::LeaderLess {
-            self.send_message_to_leader(MessageType::PositionUpdate(msg))?;
+            self.send_message_to_leader(MessageType::PositionUpdate(msg), ctx)?;
         }
         Ok(())
     }
@@ -903,24 +918,32 @@ impl Driver {
     /// Sends a message to the leader
     /// # Arguments
     /// * `message` - The message to send
-    pub fn send_message_to_leader(&self, message: MessageType) -> Result<(), io::Error> {
-        let write_half = Arc::clone(&self.write_half_to_leader);
-        let serialized = serde_json::to_string(&message)?;
+    pub fn send_message_to_leader(&mut self, message: MessageType, ctx: &mut Context<Self>) -> Result<(), io::Error> {
+        if let Some(write_half) = self.write_half_to_leader.take() {
+            let serialized = serde_json::to_string(&message).unwrap();
 
-        actix::spawn(async move {
-            let mut write_guard = write_half.write().unwrap();
+            ctx.spawn(
+                async move {
+                    let mut write_half = write_half;
+                    if let Err(e) = write_half.write_all(format!("{}\n", serialized).as_bytes()).await {
+                        log::debug!("Error al enviar el mensaje al líder: {}", e);
+                    }
 
-            if let Some(write_half) = write_guard.as_mut() {
-                if let Err(e) = write_half.write_all(format!("{}\n", serialized).as_bytes()).await {
-                    debug!("Error al enviar el mensaje al lider");
+                    // Devolver el `write_half` al actor
+                    write_half
                 }
-            } else {
-                debug!("No se pudo enviar el mensaje: no hay conexión activa");
-            }
-        });
-
+                    .into_actor(self) // Hace que el futuro corra dentro del contexto del actor
+                    .map(|write_half, actor, _ctx| {
+                        // Reinsertar `write_half` en el actor
+                        actor.write_half_to_leader = Some(write_half);
+                    }),
+            );
+        } else {
+            log::debug!("No se pudo enviar el mensaje: no hay conexión activa");
+        }
         Ok(())
     }
+
 
     /// TODO: hacer una funcion generica que reciba mensaje y canal de escritura para no repetir codigo
     fn send_message_to_payment_app(&self, message: MessageType) -> Result<(), io::Error> {

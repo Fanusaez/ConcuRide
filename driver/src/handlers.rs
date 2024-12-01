@@ -99,7 +99,7 @@ impl Handler<RideRequest> for Driver {
             log(&format!("LEADER RECEIVED RIDE REQUEST FROM PASSENGER {}", msg.id), "DRIVER");
             self.handle_ride_request_as_leader(msg).expect("Error handling ride request as leader");
         } else {
-            self.handle_ride_request_as_driver(msg, ctx.address()).expect("Error handling ride request as driver");
+            self.handle_ride_request_as_driver(msg, ctx.address(), ctx).expect("Error handling ride request as driver");
         }
     }
 }
@@ -181,7 +181,7 @@ impl Handler<FinishRide> for Driver {
         } else {
             // driver send FinishRide to the leader and change state to Idle
             log(&format!("RIDE REQUEST {} WAS FINISHED BY DRIVER {}", msg.passenger_id, msg.driver_id, ), "DRIVER");
-            self.handle_finish_ride_as_driver(msg, ctx.address()).unwrap()
+            self.handle_finish_ride_as_driver(msg, ctx.address(), ctx).unwrap()
         }
     }
 }
@@ -210,6 +210,21 @@ impl Handler<StreamMessage> for Driver {
             eprintln!("No se proporcionó un stream válido");
         }
 
+    }
+}
+
+impl Handler<WriteHalfLeader> for Driver {
+    type Result = ();
+
+    /// Handles the write half leader message, this message is received when the driver is the leader
+    /// The driver will store the write half of the stream in the leader_write_half attribute
+    fn handle(&mut self, msg: WriteHalfLeader, _ctx: &mut Self::Context) -> Self::Result {
+        if self.is_leader.load(Ordering::SeqCst) {
+            debug!("No deberia recibir este mensaje como lider")
+        }
+        else {
+            self.handle_write_half_leader_as_driver(msg).unwrap();
+        }
     }
 }
 
@@ -278,7 +293,7 @@ impl Handler<Ping> for Driver {
             self.handle_ping_as_leader(msg).unwrap();
         } else {
             info!("{}", format!("PING RECEIVED FROM LEADER {}", msg.id_sender));
-            self.handle_ping_as_driver(msg).unwrap();
+            self.handle_ping_as_driver(msg, _ctx).unwrap();
         }
     }
 }
@@ -306,7 +321,7 @@ impl Handler<PositionUpdate> for Driver {
             self.handle_position_update_as_leader(msg).unwrap();
         }
         else {
-            self.handle_position_update_as_driver(msg).unwrap();
+            self.handle_position_update_as_driver(msg, _ctx).unwrap();
         }
     }
 }
