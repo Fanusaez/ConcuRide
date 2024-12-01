@@ -107,6 +107,7 @@ impl Driver {
         let leader_port = drivers_ports[LIDER_PORT_IDX].clone();
         let last_ping_manager = LastPingManager { last_ping: Instant::now() }.start();
         let mut passengers_id = Vec::new();
+        // todo: ver eesto
         passengers_id.push(9000);
 
         // Auxiliar structures
@@ -566,6 +567,7 @@ impl Driver {
     /// * `msg` - The message containing the FinishRide
     pub fn handle_finish_ride_as_leader(&mut self, msg: FinishRide) -> Result<(), io::Error> {
         // Remove the ride from the pending rides
+        // todo: ver manejo de errores, la funcion esta la hardcodee para que no devuelva un error
         self.ride_manager.remove_ride_from_pending(msg.passenger_id)?;
 
         let msg_message_type = MessageType::FinishRide(msg);
@@ -574,6 +576,7 @@ impl Driver {
         self.send_message_to_passenger(msg_message_type, msg.passenger_id)?;
 
         // Pay ride to driver
+        // todo: en caso de ser un lider nuevo, no va a encontrar el pago, que hago en este caso?
         match self.ride_manager.get_ride_from_paid_rides(msg.passenger_id) {
             Ok(payment) => {
                 let pay_ride_msg = PayRide { ride_id: msg.passenger_id, amount: payment.amount };
