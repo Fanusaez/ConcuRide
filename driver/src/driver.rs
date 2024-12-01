@@ -79,7 +79,7 @@ pub struct Driver {
     /// Last known position of the driver (port, (x, y))
     pub drivers_last_position: HashMap<u16, (i32, i32)>,
     /// Connection to the payment app
-    pub payment_write_half: Arc<RwLock<Option<WriteHalf<TcpStream>>>>,
+    pub payment_write_half: Option<WriteHalf<TcpStream>>,
     /// Ride manager, contains the pending rides, unpaid rides and the rides and offers
     pub ride_manager: RideManager,
     /// ID's and WriteHalf of passengers
@@ -142,8 +142,6 @@ impl Driver {
                           &mut drivers_status).await?;
 
         // Arcs for shared data
-        let mut payment_write_half_arc = Arc::new(RwLock::new(payment_write_half));
-        let mut payment_read_half_arc = Arc::new(RwLock::new(payment_read_half));
         let mut passengers_write_half_arc = Arc::new(RwLock::new(passengers_write_half));
         let mut drivers_status_arc = Arc::new(RwLock::new(drivers_status));
 
@@ -161,7 +159,7 @@ impl Driver {
                 associate_driver_streams(ctx, &mut active_drivers);
 
                 // Asociar el stream del servicio de pagos
-                associate_payment_stream(ctx, payment_read_half_arc.clone());
+                associate_payment_stream(ctx, payment_read_half);
 
             }
             Driver {
@@ -176,7 +174,7 @@ impl Driver {
                 passengers_write_half: passengers_write_half_arc.clone(),
                 state: States::Idle,
                 drivers_last_position,
-                payment_write_half: payment_write_half_arc.clone(),
+                payment_write_half,
                 drivers_status: drivers_status_arc.clone(),
                 ride_manager: RideManager::new(),
                 socket: Arc::new(socket),
@@ -226,9 +224,8 @@ impl Driver {
     /// * `payment_read_half_arc` - The arc of the payment read half
     pub fn associate_payment_stream(
         ctx: &mut Context<Driver>,
-        payment_read_half_arc: Arc<RwLock<Option<ReadHalf<TcpStream>>>>)
+        mut payment_read_half: Option<ReadHalf<TcpStream>>)
         -> Result<(), io::Error> {
-        let mut payment_read_half = payment_read_half_arc.write().unwrap();
 
         if let Some(payment_read_half) = payment_read_half.take() {
             Driver::add_stream(LinesStream::new(BufReader::new(payment_read_half).lines()), ctx);
@@ -439,7 +436,7 @@ impl Driver {
     /// Handles the ride request from passenger, sends RideRequest to the closest driver
     /// # Arguments
     /// * `msg` - The message containing the ride request
-    pub fn handle_ride_request_as_leader(&mut self, msg: RideRequest) -> Result<(), io::Error> {
+    pub fn handle_ride_request_as_leader(&mut self, msg: RideRequest, ctx: &mut Context<Self>) -> Result<(), io::Error> {
 
         // Si ya hay un RideRequest en proceso, se ignora
         // TODO: quizas deberiamos prohibir esto en el pasajero
@@ -452,7 +449,7 @@ impl Driver {
         self.ride_manager.insert_unpaid_ride(msg).expect("Error adding unpaid ride");
 
         // envio el pago a la app
-        self.send_payment(msg).expect("Error sending payment");
+        self.send_payment(msg, ctx).expect("Error sending payment");
 
         Ok(())
     }
@@ -764,10 +761,10 @@ impl Driver {
     }
 
     /// Sends message to the payment app containing the ride price
-    pub fn send_payment(&mut self, msg: RideRequest) -> Result<(), io::Error>{
+    pub fn send_payment(&mut self, msg: RideRequest, ctx: &mut Context<Self>) -> Result<(), io::Error>{
         let ride_price = calculate_price(msg);
         let message = SendPayment{id: msg.id, amount: ride_price};
-        self.send_message_to_payment_app(MessageType::SendPayment(message))?;
+        self.send_message_to_payment_app(MessageType::SendPayment(message), ctx)?;
         Ok(())
     }
 
@@ -844,7 +841,7 @@ impl Driver {
     pub fn handle_new_leader_attributes_as_leader(&mut self, msg: NewLeaderAttributes, addr: Addr<Driver>, ) -> Result<(), io::Error> {
         self.active_drivers = msg.active_drivers;
         self.drivers_last_position = msg.drivers_last_position;
-        self.payment_write_half = Arc::new(RwLock::new(msg.payment_write_half));
+        self.payment_write_half = msg.payment_write_half;
         self.drivers_status = Arc::new(RwLock::new(msg.drivers_status));
 
         addr.do_send(StreamMessage{stream: msg.payment_read_half});
@@ -913,7 +910,7 @@ impl Driver {
     /// * `message` - The message to send
     pub fn send_message_to_leader(&mut self, message: MessageType, ctx: &mut Context<Self>) -> Result<(), io::Error> {
         if let Some(write_half) = self.write_half_to_leader.take() {
-            let serialized = serde_json::to_string(&message).unwrap();
+            let serialized = serde_json::to_string(&message)?;
 
             ctx.spawn(
                 async move {
@@ -932,29 +929,36 @@ impl Driver {
                     }),
             );
         } else {
-            log::debug!("No se pudo enviar el mensaje: no hay conexión activa");
+            debug!("No se pudo enviar el mensaje: no hay conexión activa");
         }
         Ok(())
     }
 
 
     /// TODO: hacer una funcion generica que reciba mensaje y canal de escritura para no repetir codigo
-    fn send_message_to_payment_app(&self, message: MessageType) -> Result<(), io::Error> {
-        let write_half = Arc::clone(&self.payment_write_half);
-        let serialized = serde_json::to_string(&message)?;
+    fn send_message_to_payment_app(&mut self, message: MessageType, ctx: &mut Context<Self>) -> Result<(), io::Error> {
+        if let Some(write_half) = self.payment_write_half.take() {
+            let serialized = serde_json::to_string(&message)?;
 
-        actix::spawn(async move {
-            let mut write_guard = write_half.write().unwrap();
+            ctx.spawn(
+                async move {
+                    let mut write_half = write_half;
+                    if let Err(e) = write_half.write_all(format!("{}\n", serialized).as_bytes()).await {
+                        debug!("Error al enviar el mensaje al líder: {}", e);
+                    }
 
-            if let Some(write_half) = write_guard.as_mut() {
-                if let Err(e) = write_half.write_all(format!("{}\n", serialized).as_bytes()).await {
-                    debug!("Error al enviar el mensaje: {:?}", e);
+                    // Devolver el `write_half` al actor
+                    write_half
                 }
-            } else {
-                debug!("No se pudo enviar el mensaje: no hay conexión activa");
-            }
-        });
-
+                    .into_actor(self) // Hace que el futuro corra dentro del contexto del actor
+                    .map(|write_half, actor, _ctx| {
+                        // Reinsertar `write_half` en el actor
+                        actor.payment_write_half = Some(write_half);
+                    }),
+            );
+        } else {
+            debug!("No se pudo enviar el mensaje: no hay conexión activa");
+        }
         Ok(())
     }
 

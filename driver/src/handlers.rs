@@ -97,7 +97,7 @@ impl Handler<RideRequest> for Driver {
         if self.is_leader.load(Ordering::SeqCst) {
             // todo: ojo, si el pasajero se reconcto no deberia imprimirse esto, en handle_ride_request_as_leader se maneja y hay otro TODO
             log(&format!("LEADER RECEIVED RIDE REQUEST FROM PASSENGER {}", msg.id), "DRIVER");
-            self.handle_ride_request_as_leader(msg).expect("Error handling ride request as leader");
+            self.handle_ride_request_as_leader(msg, ctx).expect("Error handling ride request as leader");
         } else {
             self.handle_ride_request_as_driver(msg, ctx.address(), ctx).expect("Error handling ride request as driver");
         }
