@@ -174,14 +174,14 @@ impl Handler<FinishRide> for Driver {
     /// Message received by the leader and the driver
     /// If the driver is the leader, will remove the ride from the pending rides and notify the passenger
     /// If the driver is not the leader, will send the message to the leader
-    fn handle(&mut self, msg: FinishRide, _ctx: &mut Self::Context) -> Self::Result {
+    fn handle(&mut self, msg: FinishRide, ctx: &mut Self::Context) -> Self::Result {
         if self.is_leader.load(Ordering::SeqCst) {
             log(&format!("RIDE REQUEST {} WAS FINISHED BY DRIVER {}", msg.passenger_id, msg.driver_id, ), "DRIVER");
             self.handle_finish_ride_as_leader(msg).unwrap();
         } else {
             // driver send FinishRide to the leader and change state to Idle
             log(&format!("RIDE REQUEST {} WAS FINISHED BY DRIVER {}", msg.passenger_id, msg.driver_id, ), "DRIVER");
-            self.handle_finish_ride_as_driver(msg).unwrap()
+            self.handle_finish_ride_as_driver(msg, ctx.address()).unwrap()
         }
     }
 }
@@ -306,7 +306,7 @@ impl Handler<PositionUpdate> for Driver {
             self.handle_position_update_as_leader(msg).unwrap();
         }
         else {
-            eprintln!("Driver {} is not the leader, should not receive this message", self.id);
+            self.handle_position_update_as_driver(msg).unwrap();
         }
     }
 }

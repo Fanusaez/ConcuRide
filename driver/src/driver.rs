@@ -9,6 +9,7 @@ use tokio::io::{split, AsyncBufReadExt, BufReader, AsyncWriteExt, WriteHalf, Asy
 use tokio::net::{TcpListener, TcpStream};
 use std::net::{SocketAddr, UdpSocket};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread::sleep;
 use futures::SinkExt;
 use tokio_stream::wrappers::LinesStream;
 use actix::MessageResult;
@@ -18,6 +19,7 @@ use crate::models::*;
 use crate::utils::*;
 use crate::ride_manager::*;
 use std::time::Instant;
+use log::info;
 
 pub struct LastPingManager {
     pub last_ping: Instant,
@@ -572,9 +574,14 @@ impl Driver {
         self.send_message_to_passenger(msg_message_type, msg.passenger_id)?;
 
         // Pay ride to driver
-        let payment = self.ride_manager.get_ride_from_paid_rides(msg.passenger_id)?;
-        let pay_ride_msg = PayRide{ride_id:msg.passenger_id, amount:payment.amount};
-        self.send_payment_to_driver(msg.driver_id, pay_ride_msg)?;
+        match self.ride_manager.get_ride_from_paid_rides(msg.passenger_id) {
+            Ok(payment) => {
+                let pay_ride_msg = PayRide { ride_id: msg.passenger_id, amount: payment.amount };
+                self.send_payment_to_driver(msg.driver_id, pay_ride_msg)?;
+            }
+            // todo: no encuentra porque se cambio de lider (esta bien asi?)
+            Err(e) => eprintln!("Error getting payment from paid rides: {:?}", e),
+        }
 
         Ok(())
     }
@@ -587,15 +594,22 @@ impl Driver {
     /// Finish the ride, send the FinishRide message to the leader
     /// # Arguments
     /// * `msg` - The message containing the ride request
-    pub fn handle_finish_ride_as_driver(&mut self, msg: FinishRide) -> Result<(), io::Error> {
+    pub fn handle_finish_ride_as_driver(&mut self, msg: FinishRide, addr: Addr<Driver>) -> Result<(), io::Error> {
         log(&format!("RIDE FINISHED, PASSENGER WITH ID {} HAS BEEN DROPPED OFF", msg.passenger_id), "DRIVER");
 
         // Cambiar el estado del driver a Idle
-        self.state = States::Idle;
-
-        // Enviar el mensaje de finalización al líder
-        self.send_message_to_leader(MessageType::FinishRide(msg))?;
-
+        if self.state != States::LeaderLess {
+            self.state = States::Idle;
+            self.send_message_to_leader(MessageType::FinishRide(msg))?;
+        }
+        // no tengo lider, va a dormir  seg y ver si ya hay lider autoenviandose el mismo mensaje
+        // todo: ver si es correcto esto
+        else {
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_secs(5)).await;
+                addr.do_send(msg);
+            });
+        }
         Ok(())
     }
 
@@ -699,25 +713,14 @@ impl Driver {
                 current_position.0 = (msg_clone.x_origin as f64 + x_km * i as f64) as u16;
                 current_position.1 = (msg_clone.y_origin as f64 + y_km * i as f64) as u16;
 
-                let position_update = MessageType::PositionUpdate(PositionUpdate {
+                let position_update = PositionUpdate {
                     driver_id: driver_id.clone(),
                     position: (current_position.0 as i32, current_position.1 as i32),
-                });
+                };
 
-                let write_half_clone = Arc::clone(&write_half);
-                let serialized = serde_json::to_string(&position_update).unwrap();
-                if let Some(mut write_half) = write_half_clone.write().unwrap().as_mut() {
-                    if let Err(e) = write_half
-                        .write_all(format!("{}\n", serialized).as_bytes())
-                        .await
-                    {
-                        eprintln!("Error al enviar actualizacion de posición: {:?}", e);
-                    }
-                } else {
-                    eprintln!("No hay conexion activa para enviar la posición.");
-                }
+                addr.do_send(position_update);
 
-                actix_rt::time::sleep(Duration::from_secs((duration / advancement as u64) as u64)).await;
+                actix_rt::time::sleep(Duration::from_secs(2)).await;
             }
 
             let finish_ride = FinishRide {
@@ -736,7 +739,16 @@ impl Driver {
 
     /// Handles the PositionUpdate message from the driver
     pub fn handle_position_update_as_leader(&mut self, msg: PositionUpdate) -> Result<(), io::Error> {
+        info!("UPDATING DRIVER {} POSITION TO {:?}", msg.driver_id, msg.position);
         self.drivers_last_position.insert(msg.driver_id, msg.position);
+        Ok(())
+    }
+
+    pub fn handle_position_update_as_driver(&mut self, msg: PositionUpdate) -> Result<(), io::Error> {
+        // si no tengo lider no actualizo mi posicion
+        if self.state != States::LeaderLess {
+            self.send_message_to_leader(MessageType::PositionUpdate(msg))?;
+        }
         Ok(())
     }
 
@@ -898,7 +910,7 @@ impl Driver {
 
             if let Some(write_half) = write_guard.as_mut() {
                 if let Err(e) = write_half.write_all(format!("{}\n", serialized).as_bytes()).await {
-                    eprintln!("Error al enviar el mensaje: {:?}", e);
+                    eprintln!("Error al enviar el mensaje al lider");
                 }
             } else {
                 eprintln!("No se pudo enviar el mensaje: no hay conexión activa");
@@ -1169,7 +1181,7 @@ impl Driver {
                             *drivers_id_for_leader = participants.clone();
                         }
 
-                        println!("ENVIANDO MENSAJE DE COORDINADOR");
+                        //println!("ENVIANDO MENSAJE DE COORDINADOR");
                         let leader_id = *participants.iter().max().unwrap();
                         let mut participants_election = Vec::new();
                         participants_election.push(id);
@@ -1184,7 +1196,7 @@ impl Driver {
                         }
 
                     } else {
-                        println!("ENVIANDO MENSAJE DE ELECCCION");
+                        //println!("ENVIANDO MENSAJE DE ELECCCION");
                         participants.push(id);
                         let msg_to_send = RingMessage::Election { participants };
 
@@ -1213,7 +1225,7 @@ impl Driver {
 
                     if !participants.contains(&id) {
                         // sigo el anillo
-                        println!("REENVIANDO MENSAJE DE COORDINADOR");
+                        //println!("REENVIANDO MENSAJE DE COORDINADOR");
                         participants.push(id);
                         let msg_to_send = RingMessage::Coordinator { leader_id, participants };
                         let serialized_message = serde_json::to_vec(&msg_to_send).unwrap();
@@ -1249,7 +1261,7 @@ impl Driver {
         // 4000 para que sean 10001, 10002 etc
         let target_address = format!("127.0.0.1:{}", next_id + 4000);
 
-        println!("Enviando mensaje a {}", next_id);
+        //println!("Enviando mensaje a {}", next_id);
         // Enviar el mensaje
         if let Err(e) = socket.send_to(&msg, &target_address) {
             eprintln!("Error enviando mensaje a {}: {}", next_id, e);
@@ -1260,10 +1272,10 @@ impl Driver {
         let got_ack = got_ack.1.wait_timeout_while(got_ack.0.lock().unwrap(), TIMEOUT, |got_it| got_it.is_none() || got_it.unwrap() != next_id );
         if got_ack.unwrap().1.timed_out() {
             // Si se agotó el tiempo, reintentar con el siguiente
-            println!("[{}] Timeout esperando ACK de {}", current_id, next_id);
+            //println!("[{}] Timeout esperando ACK de {}", current_id, next_id);
             Self::safe_send_next(socket, msg, next_id, got_ack_clone, drivers_id);
         } else {
-            println!("[{}] ACK recibido de {}", current_id, next_id);
+            //println!("[{}] ACK recibido de {}", current_id, next_id);
         }
     }
 }
