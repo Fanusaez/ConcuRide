@@ -83,7 +83,7 @@ pub struct Driver {
     /// Ride manager, contains the pending rides, unpaid rides and the rides and offers
     pub ride_manager: RideManager,
     /// ID's and WriteHalf of passengers
-    pub passengers_write_half: Arc<RwLock<HashMap<u16, Option<WriteHalf<TcpStream>>>>>,
+    pub passengers_write_half: HashMap<u16, Option<WriteHalf<TcpStream>>>,
     /// Status of the drivers
     pub drivers_status: Arc<RwLock<HashMap<u16, DriverStatus>>>,
     /// UDP Socket for leader election
@@ -114,7 +114,7 @@ impl Driver {
         // Auxiliar structures
         let mut active_drivers: HashMap<u16, (Option<ReadHalf<TcpStream>>, Option<WriteHalf<TcpStream>>)> = HashMap::new();
         let mut drivers_last_position: HashMap<u16, (i32, i32)> = HashMap::new();
-        let passengers_write_half: HashMap<u16, Option<WriteHalf<TcpStream>>> = HashMap::new();
+        let mut passengers_write_half: HashMap<u16, Option<WriteHalf<TcpStream>>> = HashMap::new();
         let mut drivers_status: HashMap<u16, DriverStatus> = HashMap::new();
 
         // Payment app and connection
@@ -142,7 +142,6 @@ impl Driver {
                           &mut drivers_status).await?;
 
         // Arcs for shared data
-        let mut passengers_write_half_arc = Arc::new(RwLock::new(passengers_write_half));
         let mut drivers_status_arc = Arc::new(RwLock::new(drivers_status));
 
         // para que funcione, no se porque
@@ -171,7 +170,7 @@ impl Driver {
                 active_drivers,
                 dead_drivers: Vec::new(),
                 write_half_to_leader: None,
-                passengers_write_half: passengers_write_half_arc.clone(),
+                passengers_write_half,
                 state: States::Idle,
                 drivers_last_position,
                 payment_write_half,
@@ -188,8 +187,7 @@ impl Driver {
 
         while let Ok((stream, addr)) = listener.accept().await {
             if is_leader_arc.load(Ordering::SeqCst) {
-                println!("Conexión de un pasajero en {}", addr.port());
-                handle_passenger_connection(stream, addr.port(), &passengers_write_half_arc, &driver)?;
+                handle_passenger_connection(stream, addr.port(), &driver)?;
             }
             else {
                 handle_leader_connection(stream, &driver)?;
@@ -244,15 +242,9 @@ impl Driver {
     fn handle_passenger_connection(
         stream: TcpStream,
         port_used: u16,
-        passengers_write_half_arc: &Arc<RwLock<HashMap<u16, Option<WriteHalf<TcpStream>>>>>,
         driver: &Addr<Driver>,
     ) -> Result<(), io::Error> {
         let (read, write) = split(stream);
-
-        // Guardar el WriteHalf del pasajero
-        let mut passengers_write_half = passengers_write_half_arc.write().unwrap();
-
-        passengers_write_half.insert(port_used, Some(write));
 
         // Agregar el stream de lectura al actor
         if driver.connected() {
@@ -260,6 +252,11 @@ impl Driver {
                 Ok(_) => {}
                 Err(e) => debug!("Error al enviar el stream al actorrrrr: {:?}", e),
             }
+            match driver.try_send(NewPassengerHalfWrite { passenger_id: port_used, write_half: Some(write) }) {
+                Ok(_) => {}
+                Err(e) => debug!("Error al enviar el stream al actorrrrr: {:?}", e),
+            }
+
         } else {
             debug!("El actor Driver ya no está activo.");
         }
@@ -524,8 +521,8 @@ impl Driver {
 
     /// Handles the payment rejected message from the payment app
     /// Sends the payment rejected message to the passenger
-    pub fn handle_payment_rejected_as_leader(&mut self, msg: PaymentRejected) -> Result<(), io::Error> {
-        self.send_message_to_passenger(MessageType::PaymentRejected(msg), msg.id)?;
+    pub fn handle_payment_rejected_as_leader(&mut self, msg: PaymentRejected, ctx: &mut Context<Self>) -> Result<(), io::Error> {
+        self.send_message_to_passenger(MessageType::PaymentRejected(msg), msg.id, ctx)?;
         Ok(())
     }
 
@@ -579,7 +576,7 @@ impl Driver {
         let msg_message_type = MessageType::FinishRide(msg);
 
         // Send the FinishRide message to the passenger
-        self.send_message_to_passenger(msg_message_type, msg.passenger_id)?;
+        self.send_message_to_passenger(msg_message_type, msg.passenger_id, ctx)?;
 
         // Pay ride to driver
         // todo: en caso de ser un lider nuevo, no va a encontrar el pago, que hago en este caso?
@@ -773,7 +770,7 @@ impl Driver {
     /// If there is, sends a message to the passenger to reconnect
     /// # Arguments
     /// * `passenger_id` - The id of the passenger
-    pub fn verify_pending_ride_request(&self, passenger_id: u16) -> Result<(), io::Error> {
+    pub fn verify_pending_ride_request(&mut self, passenger_id: u16, ctx: &mut Context<Self>) -> Result<(), io::Error> {
         // Verificar si hay una solicitud pendiente
         let has_pending = self.ride_manager.has_pending_ride_request(passenger_id);
 
@@ -787,7 +784,7 @@ impl Driver {
             state: "WaitingDriver".to_string(),
         };
 
-        self.send_message_to_passenger(MessageType::RideRequestReconnection(message), passenger_id)?;
+        self.send_message_to_passenger(MessageType::RideRequestReconnection(message), passenger_id, ctx)?;
 
         Ok(())
     }
@@ -896,8 +893,7 @@ impl Driver {
     /// Guarda stream de escritura de un pasajero en el hash y manda un mensaje para guardar el stream de lectura
     /// nombre se puede prestar a confusion, todo: cambiar despues
     pub fn handle_new_passenger_connection_as_leader(&mut self, msg: NewPassengerConnection, addr: Addr<Driver>) -> Result<(), io::Error> {
-        let mut passengers_write_half = self.passengers_write_half.write().unwrap();
-        passengers_write_half.insert(msg.passenger_id, Some(msg.write));
+        self.passengers_write_half.insert(msg.passenger_id, Some(msg.write));
         addr.do_send(StreamMessage{stream: Some(msg.read)});
         Ok(())
     }
@@ -967,44 +963,42 @@ impl Driver {
     /// * `message` - The message to send
     /// * `passenger_id` - The id of the passenger
     pub fn send_message_to_passenger(
-        &self,
+        &mut self,
         message: MessageType,
         passenger_id: u16,
+        ctx: &mut Context<Self>,
     ) -> Result<(), io::Error> {
-        let mut passengers_write_half_clone =  self.passengers_write_half.clone();
-        let serialized = serde_json::to_string(&message)?;
+        if let Some(write_half) = self.passengers_write_half.get_mut(&passenger_id).and_then(|wh| wh.take()) {
+            let serialized = serde_json::to_string(&message)?;
 
-        actix::spawn(async move {
-            let mut passengers_half_write = match passengers_write_half_clone.write() {
-                Ok(guard) => guard,
-                Err(e) => {
-                    debug!("Error al obtener el lock de escritura en `active_drivers`: {:?}", e);
-                    return;
-                }
-            };
-
-            if let Some(write_half) = passengers_half_write.get_mut(&passenger_id) {
-                let serialized = match serde_json::to_string(&message) {
-                    Ok(s) => s,
-                    Err(e) => {
-                        debug!("Error serializando el mensaje: {:?}", e);
-                        return;
-                    }
-                };
-
-                if let Some(write_half) = write_half.as_mut() {
+            ctx.spawn(
+                async move {
+                    let mut write_half = write_half;
                     if let Err(e) = write_half.write_all(format!("{}\n", serialized).as_bytes()).await {
-                        debug!("Error al enviar el mensaje: {:?}", e);
+                        log::debug!("Error al enviar el mensaje al pasajero {}: {:?}", passenger_id, e);
                     }
-                } else {
-                    debug!("No se pudo enviar el mensaje: no hay conexión activa");
+
+                    // Devolver el `write_half` al actor
+                    (passenger_id, write_half)
                 }
-            } else {
-                debug!("No se encontró un `write_half` para el `driver_id_to_send` especificado");
-            }
-        });
+                    .into_actor(self)
+                    .map(|(passenger_id, write_half), actor, _ctx| {
+                        // Reinsertar el `write_half` en el mapa de `passengers_write_half`
+                        if let Some(passenger_write_half) = actor.passengers_write_half.get_mut(&passenger_id) {
+                            *passenger_write_half = Some(write_half);
+                        }
+                    }),
+            );
+        } else {
+            debug!(
+            "No se pudo enviar el mensaje: no hay conexión activa para el pasajero {}",
+            passenger_id
+        );
+        }
+
         Ok(())
     }
+
 
     /// Sends the ride request to the driver specified by the id, only used by the leader
     /// # Arguments

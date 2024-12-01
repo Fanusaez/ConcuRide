@@ -126,7 +126,7 @@ impl Handler<PaymentRejected> for Driver {
     fn handle(&mut self, msg: PaymentRejected, ctx: &mut Self::Context) -> Self::Result {
         if self.is_leader.load(Ordering::SeqCst) {
             log(&format!("PAYMENT REJECTED FOR PASSENGER {}", msg.id), "DRIVER");
-            self.handle_payment_rejected_as_leader(msg).unwrap();
+            self.handle_payment_rejected_as_leader(msg, ctx).unwrap();
         }
         else {
             eprintln!("Driver {} is not the leader, should not receive this message", self.id);
@@ -236,18 +236,17 @@ impl Handler<WriteHalfLeader> for Driver {
 impl Handler<NewConnection> for Driver {
     type Result = ();
 
-    fn handle(&mut self, msg: NewConnection, _ctx: &mut Self::Context) -> Self::Result {
-        let mut passengers_write_half = self.passengers_write_half.write().unwrap();
+    fn handle(&mut self, msg: NewConnection, ctx: &mut Self::Context) -> Self::Result {
         let new_passenger_id = msg.passenger_id;
         let old_passenger_id = msg.used_port;
 
         // Ver si ya estaba la conexion con el pasajero
-        let previous_connection = passengers_write_half.contains_key(&new_passenger_id);
+        let previous_connection = self.passengers_write_half.contains_key(&new_passenger_id);
 
         // en caso de reconexion, borrar la conexion anterior
         if previous_connection {
             log(&format!("RE-CONNECTED WITH PASSENGER {}", new_passenger_id), "INFO");
-            match passengers_write_half.remove(&new_passenger_id) {
+            match self.passengers_write_half.remove(&new_passenger_id) {
                 Some(_write_half) => {
                     //eprintln!("Se eliminó la conexión anterior con el pasajero {}", new_passenger_id);
                 }
@@ -261,15 +260,15 @@ impl Handler<NewConnection> for Driver {
         }
 
         // Reemplazar la clave
-        if let Some(write_half_passenger) = passengers_write_half.remove(&old_passenger_id) {
-            passengers_write_half.insert(new_passenger_id, write_half_passenger);
+        if let Some(write_half_passenger) = self.passengers_write_half.remove(&old_passenger_id) {
+            self.passengers_write_half.insert(new_passenger_id, write_half_passenger);
         } else {
             eprintln!("No se encontró el puerto usado por el pasajero");
         }
 
         // si ya hubo alguna conexion, verificar que no haya un RideRequest pendiente
         if previous_connection {
-            self.verify_pending_ride_request(new_passenger_id).unwrap();
+            self.verify_pending_ride_request(new_passenger_id, ctx).unwrap();
         }
 
     }
@@ -396,6 +395,15 @@ impl Handler<NewLeaderAttributes> for Driver {
             eprintln!("Driver {} is not the leader, should not receive this message", self.id);
         }
     }
+}
+
+impl Handler<NewPassengerHalfWrite> for Driver {
+    type Result = ();
+
+    fn handle(&mut self, msg: NewPassengerHalfWrite, _ctx: &mut Self::Context) -> Self::Result {
+        self.passengers_write_half.insert(msg.passenger_id, Some(msg.write_half.unwrap()));
+    }
+
 }
 
 impl Actor for LastPingManager {

@@ -159,6 +159,12 @@ pub struct NewPassengerConnection {
     pub read: ReadHalf<TcpStream>,
 }
 
+#[derive(Message, Debug)]
+#[rtype(result = "()")]
+pub struct NewPassengerHalfWrite {
+    pub passenger_id: u16,
+    pub write_half: Option<WriteHalf<TcpStream>>,
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum RingMessage {
