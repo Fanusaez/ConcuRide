@@ -112,7 +112,7 @@ impl Handler<PaymentAccepted> for Driver {
     /// Handles the payment accepted message
     fn handle(&mut self, msg: PaymentAccepted, ctx: &mut Self::Context) -> Self::Result {
         if self.is_leader.load(Ordering::SeqCst) {
-            self.handle_payment_accepted_as_leader(msg, ctx.address()).unwrap();
+            self.handle_payment_accepted_as_leader(msg, ctx.address(), ctx).unwrap();
         }
         else {
             eprintln!("Driver {} is not the leader, should not receive this message", self.id);
@@ -157,7 +157,7 @@ impl Handler<DeclineRide> for Driver {
     fn handle(&mut self, msg: DeclineRide, ctx: &mut Self::Context) -> Self::Result {
         if self.is_leader.load(Ordering::SeqCst) {
             log(&format!("RIDE REQUEST {} WAS DECLINED BY DRIVER {}", msg.passenger_id, msg.driver_id, ), "DRIVER");
-            match self.handle_declined_ride_as_leader(msg, ctx.address()) {
+            match self.handle_declined_ride_as_leader(msg, ctx.address(), ctx) {
                 Ok(_) => {}
                 Err(e) => {
                     eprintln!("Error handling declined ride as leader: {:?}", e);
@@ -177,7 +177,7 @@ impl Handler<FinishRide> for Driver {
     fn handle(&mut self, msg: FinishRide, ctx: &mut Self::Context) -> Self::Result {
         if self.is_leader.load(Ordering::SeqCst) {
             log(&format!("RIDE REQUEST {} WAS FINISHED BY DRIVER {}", msg.passenger_id, msg.driver_id, ), "DRIVER");
-            self.handle_finish_ride_as_leader(msg).unwrap();
+            self.handle_finish_ride_as_leader(msg, ctx).unwrap();
         } else {
             // driver send FinishRide to the leader and change state to Idle
             log(&format!("RIDE REQUEST {} WAS FINISHED BY DRIVER {}", msg.passenger_id, msg.driver_id, ), "DRIVER");
@@ -192,7 +192,7 @@ impl Handler<RestartDriverSearch> for Driver {
     /// Handles the restart driver search message
     fn handle(&mut self, msg: RestartDriverSearch, ctx: &mut Self::Context) -> Self::Result {
         if self.is_leader.load(Ordering::SeqCst) {
-            self.handle_restart_driver_search_as_leader(msg, ctx.address()).unwrap();
+            self.handle_restart_driver_search_as_leader(msg, ctx.address(), ctx).unwrap();
         } else {
             eprintln!("Driver {} is not the leader, should not receive this message", self.id);
         }
@@ -305,7 +305,7 @@ impl Handler<SendPingTo> for Driver {
 
     fn handle(&mut self, msg: SendPingTo, _ctx: &mut Self::Context) -> Self::Result {
         if self.is_leader.load(Ordering::SeqCst) {
-            self.send_ping_to_driver(msg.id_to_send).unwrap();
+            self.send_ping_to_driver(msg.id_to_send, _ctx).unwrap();
         } else {
             eprintln!("Driver {} is not the leader, should not receive this message", self.id);
         }
