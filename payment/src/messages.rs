@@ -35,6 +35,7 @@ pub struct PaymentRejected {
     pub id: u16,
 }
 
+/// Contains a message to be sent through the socket
 #[derive(Serialize, Deserialize, Message, Debug, Clone)]
 #[rtype(result = "()")]
 pub struct SendMessage {
