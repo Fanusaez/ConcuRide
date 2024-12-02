@@ -1,46 +1,38 @@
-use std::env;
-use crate::payment::PaymentApp;
-//use actix::prelude::;
-use tokio::io::{split};
-use actix::{Actor};
-//use std::sync::Arc;
-//use std::sync::RwLock;
-//use std::io; 
+use crate::payment::{log, PaymentApp};
+use actix::Actor;
+use tokio::io::split;
 use tokio::net::TcpListener;
 
-
+mod messages;
 mod payment;
 
-use crate::payment::{SocketWriter, SocketReader};
+use crate::payment::{SocketReader, SocketWriter};
 
+/// Default port used by the payment app to listen to new connections
 const DEFAULT_PORT: u16 = 7500;
 
+/// Main function. Creates the payment app, conformed by the actors
+/// 'SocketReader', 'SocketWriter', and 'PaymentApp'
 #[actix_rt::main]
 async fn main() -> std::io::Result<()> {
-    let args: Vec<String> = env::args().collect();
+    let listener = TcpListener::bind(format!("127.0.0.1:{}", DEFAULT_PORT)).await?;
 
-    let port = if args.len() == 1 {
-        DEFAULT_PORT
-    } else {
-        args[1].parse::<u16>().expect("Ingrese un numero de puerto")
-    };
+    log(
+        &format!("PAYMENT APP LISTENING ON PORT {}", DEFAULT_PORT),
+        "INFO",
+    );
 
-    println!("Usando el puerto: {}", port);
-
-    let listener = TcpListener::bind(format!("127.0.0.1:{}", DEFAULT_PORT)).await.unwrap();
-
-    while let Ok((stream, addr)) = listener.accept().await {
+    while let Ok((stream, _)) = listener.accept().await {
         let (read_half, write_half) = split(stream);
         payment::log("NEW CLIENT CONNECTED", "NEW_CONNECTION");
-        // Creo el socket writer (encargado de recibir los mensajes de payment app y enviarlos
-        // por socket al conductor lider)
-        let writer_addr = SocketWriter::new(write_half).start();
+        // Creation of SocketWriter actor
+        let writer_addr = SocketWriter::new(Some(write_half)).start();
 
-        // Creo la app de pagos y le paso la direccion del socket writer para enviarle los mensajes
+        // Creation of PaymentApp actor
         let payment_app_addr = PaymentApp::new(writer_addr).start();
-    
-        // Creo el actor SocketReader, pasando el read_half y la dirección de PaymentApp
-        SocketReader::start(read_half, addr, payment_app_addr).await?;
+
+        // Creation of SocketReader actor
+        SocketReader::start(read_half, payment_app_addr).await?;
     }
 
     Ok(())

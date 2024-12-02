@@ -1,54 +1,30 @@
-use actix::{Actor, Context, Handler, Message, Addr};
+//! Payment app actors (SocketReader, PaymentApp, SocketWriter)
+
+use actix::ActorFutureExt;
+use actix::StreamHandler;
+use actix::{Actor, Addr, AsyncContext, Context, Handler, WrapFuture};
+use colored::Colorize;
+use rand::Rng;
 use std::collections::HashMap;
 use std::io::{self};
-use tokio::io::{WriteHalf, ReadHalf, AsyncWriteExt, BufReader, AsyncBufReadExt};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, ReadHalf, WriteHalf};
 use tokio::net::TcpStream;
-use serde::{Serialize, Deserialize};
-use actix::StreamHandler;
-use std::sync::Arc;
-use tokio::sync::RwLock;
-use std::net::SocketAddr;
 use tokio_stream::wrappers::LinesStream;
-use rand::Rng;
-use colored::Colorize;
 
+use crate::messages::*;
+
+/// Probability that a payment will be rejected
 const PROBABILITY_PAYMENT_REJECTED: f64 = 0.01;
 
+// ---------------------------------------------------------------------------------------- //
+// ----------------------------------    Socket Reader   ---------------------------------- //
+// ---------------------------------------------------------------------------------------- //
 
-// Mensajes
-#[derive(Serialize, Deserialize, Debug)]
-#[serde(tag = "message_type")]
-enum MessageType {
-    SendPayment(SendPayment),
-    PaymentAccepted(PaymentAccepted),
-    PaymentRejected(PaymentRejected),
-}
-
-#[derive(Serialize, Deserialize, Message, Debug, Clone, Copy)]
-#[rtype(result = "()")]
-pub struct SendPayment {
-    pub id: u16,
-    pub amount: u16,
-}
-
-#[derive(Serialize, Deserialize, Message, Debug, Clone, Copy)]
-#[rtype(result = "()")]
-pub struct PaymentAccepted {
-    pub id: u16,
-    pub amount: u16,
-}
-
-#[derive(Serialize, Deserialize, Message, Debug, Clone, Copy)]
-#[rtype(result = "()")]
-pub struct PaymentRejected {
-    pub id: u16,
-}
-
-/// ----------------------------------    Socket Reader   ----------------------------------  ///
-
-// Actor lector
+/// Contains the socket address and the address from the PaymentApp actor
+/// Reads the new message from the socket address and sends it to the
+/// paymentapp actor to process it
 pub struct SocketReader {
-    addr: SocketAddr,
+    /// Adress of the actor PaymentApp
     payment_app: Addr<PaymentApp>,
 }
 
@@ -57,25 +33,38 @@ impl Actor for SocketReader {
 }
 
 impl SocketReader {
-    pub fn new(addr: SocketAddr, payment_app: Addr<PaymentApp>) -> Self {
-        Self {addr, payment_app}
+    /// Creates a new SocketReader who will listen to the socket address passed by
+    /// parameter, turn the received information to formated messages and send them
+    /// to the payment app
+    /// # Arguments
+    /// `payment_app` - Address of the actor PaymentApp
+    /// # Returns
+    /// `SocketReader`
+    pub fn new(payment_app: Addr<PaymentApp>) -> Self {
+        Self { payment_app }
     }
 
-    pub async fn start(read_half: ReadHalf<TcpStream>, addr: SocketAddr, payment_app: Addr<PaymentApp>) -> Result<(), io::Error> {
+    /// Starts and initializes the SocketReader actor
+    /// # Arguments
+    pub async fn start(
+        read_half: ReadHalf<TcpStream>,
+        payment_app: Addr<PaymentApp>,
+    ) -> Result<(), io::Error> {
         SocketReader::create(|ctx| {
             SocketReader::add_stream(LinesStream::new(BufReader::new(read_half).lines()), ctx);
-            SocketReader::new(addr, payment_app)
+            SocketReader::new(payment_app)
         });
         Ok(())
     }
-
 }
 
 impl StreamHandler<Result<String, io::Error>> for SocketReader {
+    /// Handles the information received from the socket, descerialices it and
+    /// sends it to the payment app in a format that it will be able to process
     fn handle(&mut self, read: Result<String, io::Error>, _ctx: &mut Self::Context) {
         if let Ok(line) = read {
-
-            let message: MessageType = serde_json::from_str(&line).expect("Failed to deserialize message");
+            let message: MessageType =
+                serde_json::from_str(&line).expect("Failed to deserialize message");
             match message {
                 MessageType::SendPayment(message) => {
                     self.payment_app.do_send(message);
@@ -90,11 +79,14 @@ impl StreamHandler<Result<String, io::Error>> for SocketReader {
     }
 }
 
+// ---------------------------------------------------------------------------------------- //
+// ----------------------------------    Socket Writer   ---------------------------------- //
+// ---------------------------------------------------------------------------------------- //
 
-/// ----------------------------------    Socket Writer   ----------------------------------  ///
-
+/// Contains the wirte half of the socket
 pub struct SocketWriter {
-    write_half: Arc<RwLock<WriteHalf<TcpStream>>>,
+    /// Tcp write half to send information to the leader driver
+    write_half: Option<WriteHalf<TcpStream>>,
 }
 
 impl Actor for SocketWriter {
@@ -102,65 +94,73 @@ impl Actor for SocketWriter {
 }
 
 impl SocketWriter {
-    pub fn new(write_half: WriteHalf<TcpStream>) -> Self {
-        Self { write_half: Arc::new(RwLock::new(write_half)) }
+    /// Creates a new SocketWriter using write half of the socket
+    /// passed by parameter
+    /// # Arguments
+    /// `write_half` - Tcp write half option
+    /// # Returns
+    /// `SocketWriter` able to communicate to the leader driver
+    pub fn new(write_half: Option<WriteHalf<TcpStream>>) -> Self {
+        Self { write_half }
     }
 }
 
 impl Handler<PaymentAccepted> for SocketWriter {
     type Result = ();
 
-    /// Serializa y envía el mensaje por el socket
-    fn handle(&mut self, msg: PaymentAccepted, _: &mut Self::Context) {
+    /// Serializes and sends the message through the socket
+    fn handle(&mut self, msg: PaymentAccepted, ctx: &mut Context<Self>) -> Self::Result {
         let json_message = serde_json::to_string(&MessageType::PaymentAccepted(msg))
-        .expect("Error serializando el mensaje PaymentAccepted");
-
-        // Lanza una tarea asincrónica para escribir en el socket
-        let write_half = self.write_half.clone();
-
-        actix::spawn(async move {
-            let mut write_half = write_half.write().await;
-            
-            // Escribir el mensaje serializado en el socket
-            if let Err(e) = write_half.write_all(format!("{}\n", json_message).as_bytes()).await {
-                eprintln!("Error escribiendo en el socket: {:?}", e);
-            }
-            println!("Payment accepted sent {}", json_message);
-        });
-
+            .expect("Error serializing PaymentAccepted message");
+        ctx.address().do_send(SendMessage { msg: json_message });
     }
 }
 
 impl Handler<PaymentRejected> for SocketWriter {
     type Result = ();
 
-    /// Serializa y envía el mensaje por el socket
-    fn handle(&mut self, msg: PaymentRejected, _: &mut Self::Context) {
+    /// Serializes and sends the message through the socket
+    fn handle(&mut self, msg: PaymentRejected, ctx: &mut Context<Self>) -> Self::Result {
         let json_message = serde_json::to_string(&MessageType::PaymentRejected(msg))
-            .expect("Error serializando el mensaje PaymentAccepted");
-
-        // Lanza una tarea asincrónica para escribir en el socket
-        let write_half = self.write_half.clone();
-
-        actix::spawn(async move {
-            let mut write_half = write_half.write().await;
-
-            // Escribir el mensaje serializado en el socket
-            if let Err(e) = write_half.write_all(format!("{}\n", json_message).as_bytes()).await {
-                eprintln!("Error escribiendo en el socket: {:?}", e);
-            }
-            println!("Payment rejected sent");
-        });
-
+            .expect("Error serializing PaymentRejected message");
+        ctx.address().do_send(SendMessage { msg: json_message });
     }
 }
 
+impl Handler<SendMessage> for SocketWriter {
+    type Result = ();
+    fn handle(&mut self, msg: SendMessage, ctx: &mut Context<Self>) {
+        let write_half = self.write_half.take().expect("Writer already closed!");
+        ctx.spawn(
+            async move {
+                let mut write = write_half;
 
+                if let Err(e) = write.write_all(format!("{}\n", msg.msg).as_bytes()).await {
+                    log::debug!("Error sending PaymentAccepted message: {}", e);
+                }
 
-///  ----------------------------------    Payment App   ----------------------------------  ///
+                // Return the write_half after sending
+                write
+            }
+            .into_actor(self) // Convert the future into an actor's future
+            .map(|write_half, actor, _| {
+                // Reinsert the write_half into the actor
+                actor.write_half = Some(write_half);
+            }),
+        );
+    }
+}
 
+// -------------------------------------------------------------------------------------- //
+// ----------------------------------    Payment App   ---------------------------------- //
+// -------------------------------------------------------------------------------------- //
+
+/// Contains the rides whose payment have been approved and the address of the
+/// SocketWriter actor
 pub struct PaymentApp {
-    rides_and_payments: HashMap<u16,u16>, //id, amount
+    /// Rides whose payment have already been approved <ride_id, price_amount>
+    rides_and_payments: HashMap<u16, u16>, //id, amount
+    /// Address of the SocketWriter actor to send information
     writer: Addr<SocketWriter>,
 }
 
@@ -171,24 +171,39 @@ impl Actor for PaymentApp {
 impl Handler<SendPayment> for PaymentApp {
     type Result = ();
 
-    /// Procesa el mensaje 'SendPayment' y envía al wirter si fue aceptado o no
-    fn handle(&mut self, msg: SendPayment, _: &mut Self::Context) {
+    /// Process `SendPayment` message and sends to the SocketWriter if the
+    /// payment has been approved or not
+    fn handle(&mut self, msg: SendPayment, _: &mut Self::Context) -> Self::Result {
         if self.payment_is_accepted() {
-            let payment_accepted = PaymentAccepted{id: msg.id, amount: msg.amount};
-            log(&format!("PAYMENT ACCEPTED FOR RIDE {}", msg.id), "NEW_CONNECTION");
-            self.rides_and_payments.insert(msg.id, msg.amount); //Lo agrego a los viajes aceptados
-            self.writer.do_send(payment_accepted);
-        }
-        else {
-            let payment_rejected = PaymentRejected{id:msg.id};
-            log(&format!("PAYMENT REJECTED FOR RIDE {}", msg.id), "DISCONNECTION");;
-            self.writer.do_send(payment_rejected);
+            let payment_accepted = PaymentAccepted {
+                id: msg.id,
+                amount: msg.amount,
+            };
+            log(
+                &format!("PAYMENT ACCEPTED FOR RIDE {}", msg.id),
+                "NEW_CONNECTION",
+            );
+            self.rides_and_payments.insert(msg.id, msg.amount); // Add to accepted rides
+            match self.writer.try_send(payment_accepted) {
+                Ok(_) => (),
+                Err(_) => println!("Error sending message to SocketWriter"),
+            }
+        } else {
+            let payment_rejected = PaymentRejected { id: msg.id };
+            log(
+                &format!("PAYMENT REJECTED FOR RIDE {}", msg.id),
+                "DISCONNECTION",
+            );
+            match self.writer.try_send(payment_rejected) {
+                Ok(_) => (),
+                Err(_) => println!("Error sending message to SocketWriter"),
+            }
         }
     }
 }
 
 impl PaymentApp {
-    // Nueva función `new` para PaymentApp
+    /// Returns an instance of a PaymentApp
     pub fn new(writer: Addr<SocketWriter>) -> Self {
         PaymentApp {
             rides_and_payments: HashMap::new(),
@@ -196,6 +211,7 @@ impl PaymentApp {
         }
     }
 
+    /// Decides if the payment has been approved or not using a random generator
     pub fn payment_is_accepted(&mut self) -> bool {
         let mut rng = rand::thread_rng();
         let random_number: f64 = rng.gen_range(0.0..1.0);
@@ -203,8 +219,7 @@ impl PaymentApp {
     }
 }
 
-
-
+/// Log function to show formatted messages
 pub fn log(message: &str, type_msg: &str) {
     match type_msg {
         "DRIVER" => println!("[{}] - {}", type_msg, message.blue().bold()),
