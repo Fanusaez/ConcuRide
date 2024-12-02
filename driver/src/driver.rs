@@ -36,7 +36,7 @@ impl PartialEq for States{
 
 #[derive(Clone, Debug)]
 pub struct DriverStatus {
-    pub last_response: Option<std::time::Instant>, // Último tiempo de respuesta
+    pub last_response: Option<Instant>, // Último tiempo de respuesta
     pub is_alive: bool, // Estado del driver
 }
 
@@ -52,7 +52,7 @@ const TIMEOUT: Duration = Duration::from_secs(5);
 pub type FullStream = (Option<ReadHalf<TcpStream>>, Option<WriteHalf<TcpStream>>);
 
 pub struct Driver {
-    /// The port of the driver
+    /// The id of the driver, for listening connections and identifying the driver
     pub id: u16,
     /// The driver's position
     pub position: (i32, i32),
@@ -68,9 +68,9 @@ pub struct Driver {
     pub active_drivers: HashMap<u16, FullStream>,
     /// ID's of Dead Drivers
     pub dead_drivers: Vec<u16>,
-    /// States of the driver
+    /// State of the driver
     pub state: States,
-    /// Last known position of the driver (port, (x, y))
+    /// Last known position of the driver (id, (x, y))
     pub drivers_last_position: HashMap<u16, (i32, i32)>,
     /// Connection to the payment app
     pub payment_write_half: Option<WriteHalf<TcpStream>>,
@@ -78,13 +78,13 @@ pub struct Driver {
     pub ride_manager: RideManager,
     /// ID's and WriteHalf of passengers
     pub passengers_write_half: HashMap<u16, Option<WriteHalf<TcpStream>>>,
-    /// Status of the drivers
+    /// Status of the drivers, contains the last response and if the driver is alive
     pub drivers_status:HashMap<u16, DriverStatus>,
     /// UDP Socket for leader election
     pub socket: Arc<UdpSocket>,
     /// Driver's IDS
     pub drivers_id: Vec<u16>,
-    /// Pasajeros que se van a conectar
+    /// All known passengers id's
     pub passengers_id: Vec<u16>,
 }
 
@@ -188,7 +188,7 @@ impl Driver {
     /// Associates the drivers streams to the driver actor, only used by the leader
     /// # Arguments
     /// * `ctx` - The context of the driver
-    /// * `active_drivers_arc` - The arc of the active drivers
+    /// * `active_drivers` - The id and the full stream to the drivers
     pub fn associate_drivers_stream(
         ctx: &mut Context<Driver>,
         active_drivers: &mut HashMap<u16, FullStream>)
@@ -198,7 +198,7 @@ impl Driver {
             if let Some(read_half) = read.take() {
                 Driver::add_stream(LinesStream::new(BufReader::new(read_half).lines()), ctx);
             } else {
-                debug!("No hay un stream de lectura disponible para el conductor con id {}", id);
+                debug!("No read stream available for driver {}", id);
             }
         }
         Ok(())
@@ -207,7 +207,7 @@ impl Driver {
     /// Associates the payment stream to the driver actor, only used by the leader
     /// # Arguments
     /// * `ctx` - The context of the driver
-    /// * `payment_read_half_arc` - The arc of the payment read half
+    /// * `payment_read_half` - The arc of the payment read half
     pub fn associate_payment_stream(
         ctx: &mut Context<Driver>,
         mut payment_read_half: Option<ReadHalf<TcpStream>>)
@@ -216,7 +216,7 @@ impl Driver {
         if let Some(payment_read_half) = payment_read_half.take() {
             Driver::add_stream(LinesStream::new(BufReader::new(payment_read_half).lines()), ctx);
         } else {
-            debug!("No hay un stream de lectura disponible para el servicio de pagos");
+            debug!("No read stream available for payment");
         }
         Ok(())
     }
@@ -225,7 +225,6 @@ impl Driver {
     /// # Arguments
     /// * `stream` - The stream of the passenger
     /// * `id` - The id of the passenger
-    /// * `passengers_write_half_arc` - The arc of the write halves of the passengers
     /// * `driver` - The address of the driver
     fn handle_passenger_connection(
         stream: TcpStream,
@@ -234,19 +233,20 @@ impl Driver {
     ) -> Result<(), io::Error> {
         let (read, write) = split(stream);
 
-        // Agregar el stream de lectura al actor
         if driver.connected() {
+            // Sends the read stream to the driver
             match driver.try_send(StreamMessage { stream: Some(read) }) {
                 Ok(_) => {}
-                Err(e) => debug!("Error al enviar el stream al actorrrrr: {:?}", e),
+                Err(e) => debug!("Error sending the read stream to the actor: {:?}", e),
             }
+            // Sends the write stream + the id of the passenger to the driver
             match driver.try_send(NewPassengerHalfWrite { passenger_id: port_used, write_half: Some(write) }) {
                 Ok(_) => {}
-                Err(e) => debug!("Error al enviar el stream al actorrrrr: {:?}", e),
+                Err(e) => debug!("Error sending : {:?}", e),
             }
 
         } else {
-            debug!("El actor Driver ya no está activo.");
+            debug!("The actor is not connected");
         }
         Ok(())
     }
@@ -262,31 +262,34 @@ impl Driver {
     ) -> Result<(), io::Error> {
         let (read, write) = split(stream);
 
-        // Agregar el stream de lectura al actor
+        // Sends the read stream to the driver
         match addr.try_send(StreamMessage { stream: Some(read) }) {
             Ok(_) => {}
             Err(e) => {
-                debug!("Error al enviar el stream al actor: {:?}", e);
+                debug!("Error sending the read stream to the actor: {:?}", e);
             }
         }
 
-        // Agregar el stream de lectura al actor
+        // Sends the write stream of the leader to the driver
         match addr.try_send(WriteHalfLeader { write_half: Some(write) }) {
             Ok(_) => {}
             Err(e) => {
-                debug!("Error al enviar el stream al actor: {:?}", e);
+                debug!("Error sending the write stream of the leader to the actor: {:?}", e);
             }
         }
 
         Ok(())
     }
 
-    /// utilizado en el inicio para asociar el stream al lider
+    /// Handles the stream message of the leader, only used by the drivers
+    /// # Arguments
+    /// * `msg` - The message containing the stream of the leader
+    /// * `ctx` - The context of the driver
     pub fn handle_write_half_leader_as_driver(&mut self, msg: WriteHalfLeader) -> Result<(), io::Error> {
         if let Some(write_half) = msg.write_half {
             self.write_half_to_leader = Some(write_half);
         } else {
-            eprintln!("No se proporcionó un write half válido para la conexion con el líder");
+            debug!("No write stream available for the leader");
         }
         Ok(())
     }
@@ -300,17 +303,16 @@ impl Driver {
     /// Starts the ping system, only used by leader
     /// In a loop sends pings to the drivers
     /// # Arguments
-    /// * `addr` - The address of the driver
+    /// * `ctx` - The context of the driver
     pub fn start_ping_system(&mut self, addr: Addr<Driver>, ctx: &mut Context<Self>) {
-        // Usar `run_interval` para tareas periódicas dentro del contexto del actor
         ctx.run_interval(Duration::from_secs(PING_INTERVAL), move |actor, _ctx| {
-            // Iterar sobre los conductores y actualizar estados
+            // For each driver, send a ping
             let driver_ids: Vec<u16> = actor.drivers_status.keys().cloned().collect();
 
             for driver_id in driver_ids {
                 addr.do_send(SendPingTo { id_to_send: driver_id });
 
-                // Actualizar el estado del conductor
+                // Check if the driver is alive
                 if !actor.update_driver_status(driver_id) {
                     addr.do_send(DeadDriver { driver_id });
                 }
@@ -318,19 +320,22 @@ impl Driver {
         });
     }
 
-    /// Handles the ping message as a driver
+    /// Handles the ping message as a leader
     /// This is a response Ping from a driver (PONG)
+    /// # Arguments
+    /// * `msg` - The message containing the ping
     pub fn handle_ping_as_leader(&mut self, msg: Ping) -> Result<(), io::Error> {
-        // id del driver que me envio el ping
         let driver_id = msg.id_sender;
+        // Update last ping time of driver
         self.drivers_status.get_mut(&driver_id).unwrap().last_response = Some(Instant::now());
         Ok(())
     }
 
-    /// Handles the ping message as a driver
-    /// This is a response Ping from a driver
+    /// Handles the ping message as a driver, only used by the driver
+    /// It will send a pong message to the leader
     /// # Arguments
     /// * `msg` - The message containing the ping
+    /// * `ctx` - The context of the driver
     pub fn handle_ping_as_driver(&mut self, msg: Ping, ctx: &mut Context<Self>) -> Result<(), io::Error> {
         let response = Ping {
             id_sender: self.id,
@@ -344,19 +349,23 @@ impl Driver {
         Ok(())
     }
 
-    /// Sends a ping to the driver with the specified id
+    /// Sends a ping to the driver with the specified id, only used by the leader
+    /// # Arguments
+    /// * `id_driver` - The id of the driver
+    /// * `ctx` - The context of the driver
     pub fn send_ping_to_driver(&mut self, id_driver: u16, ctx: &mut Context<Self>) -> Result<(), io::Error> {
         let message = Ping {
             id_sender: self.id,
             id_receiver: id_driver,
         };
         self.send_message_to_driver(id_driver, MessageType::Ping(message), ctx)?;
-
         Ok(())
     }
 
-    /// Checks if the leader is alive, if the leader stop sending pings, the driver will send an auto message
-    /// Only used by driver
+    /// Checks if the leader is alive, only used by driver
+    /// if the leader stop sending pings, the driver will send an auto message
+    /// # Arguments
+    /// * `addr` - The address of the driver
     pub fn check_leader_alive(&mut self, addr: Addr<Driver>) {
         let last_ping_by_leader = self.last_ping_by_leader.clone();
         let leader_id = self.leader_port;
@@ -381,9 +390,10 @@ impl Driver {
 
     /// ------------------------------------------------------------------ END PING IMPLEMENTATION ---------------------------------------------------- ///
 
-    ///Handles the ride request from the leader as a driver
+    /// Handles the ride request from the leader as a driver
     /// # Arguments
     /// * `msg` - The message containing the ride request
+    /// * `ctx` - The context of the driver
     pub fn handle_ride_request_as_driver(&mut self, msg: RideRequest, addr: Addr<Self>, ctx: &mut Context<Self>) -> Result<(), io::Error> {
         let result = boolean_with_probability(PROBABILITY_OF_ACCEPTING_RIDE);
 
@@ -402,20 +412,19 @@ impl Driver {
     /// Handles the ride request from passenger, sends RideRequest to the closest driver
     /// # Arguments
     /// * `msg` - The message containing the ride request
+    /// * `ctx` - The context of the driver
     pub fn handle_ride_request_as_leader(&mut self, msg: RideRequest, ctx: &mut Context<Self>) -> Result<(), io::Error> {
 
-        // Si ya hay un RideRequest en proceso, se ignora
-        // TODO: quizas deberiamos prohibir esto en el pasajero
+        // Ignore request if there is a pending ride request
         if self.ride_manager.has_pending_ride_request(msg.id) {
-            // Ignorar si ya hay un RideRequest en proceso
             return Ok(());
         }
 
-        // lo agrego a los unpaid rides
+        // Insert the ride request in the unpaid rides
         self.ride_manager.insert_unpaid_ride(msg).expect("Error adding unpaid ride");
 
-        // envio el pago a la app
-        self.send_payment(msg, ctx).expect("Error sending payment");
+        // Send the payment to the payment app
+        self.send_payment(msg, ctx)?;
 
         Ok(())
     }
@@ -424,70 +433,77 @@ impl Driver {
     /// Sends the ride request to the closest driver and adds the driver to the offers
     /// # Arguments
     /// * `msg` - The message containing the PaymentAccepted
+    /// * `ctx` - The context of the driver
     pub fn handle_payment_accepted_as_leader(&mut self, msg: PaymentAccepted, addr: Addr<Self>, ctx: &mut Context<Self>) -> Result<(), io::Error> {
-        // obtengo el ride request del unpaid_rides y lo elimino del hashmap
+        // Remove the ride request from the unpaid rides
         let ride_request = self.ride_manager.remove_unpaid_ride(msg.id)?;
 
-        // saves ride in pending_rides
+        // Saves ride in pending_rides
         self.ride_manager.insert_ride_in_pending(ride_request)?;
 
-        // Busco el driver mas cercano y le envio el RideRequest
+        // Search the closest driver to the passenger and send the ride request
         self.search_driver_and_send_ride(ride_request, addr, ctx)?;
 
-        // Inserto el id y el pago en la lista de viajes pagos
+        // Insert the ride in paid rides
         self.ride_manager.insert_ride_in_paid_rides(msg.id, msg)?;
 
         Ok(())
     }
 
     /// Search the closest driver to the passenger and send the ride request
+    /// Only used by the leader
     /// Insert the driver id in the ride_and_offers hashmap
     /// # Arguments
     /// * `ride_request` - The ride request to send
+    /// * `ctx` - The context of the driver
     fn search_driver_and_send_ride(&mut self, ride_request: RideRequest, addr: Addr<Self>, ctx: &mut Context<Self>) -> Result<(), io::Error> {
+        // Closest driver to the passenger
         let driver_id_to_send = self.get_closest_driver(ride_request);
 
-        // Si no hay drivers disponibles
+        // No driver available
         if driver_id_to_send == NO_DRIVER_AVAILABLE {
             log(&format!("NO DRIVERS AVAILABLE RIGHT NOW FOR PASSENGER {}, TRYING AGAIN LATER", ride_request.id), "INFO");
 
-            // Elimino todas las ofertas que se hicieron (pero no el id del pasajero)
+            // Delete all the offers for the ride, so it can be offered again
             self.ride_manager.remove_offers_from_ride_and_offers(ride_request.id)?;
 
-            // Pauso y reinicio la busqueda de drivers
+            // Pause and restart the driver search
             self.pause_and_restart_driver_search(ride_request, addr)?;
 
             return Ok(());
         }
 
-        // Envio el mensaje al driver
+        // Send the ride request to the driver
         self.send_message_to_driver(driver_id_to_send, MessageType::RideRequest(ride_request), ctx)?;
 
-        // Agrego el id del driver al vector de ofertas
+        // Insert the driver id in the ride_and_offers hashmap
         self.ride_manager.insert_in_rides_and_offers(ride_request.id, driver_id_to_send)?;
 
         Ok(())
     }
 
     /// Pause and restart the driver search, so we dont do a busy wait
+    /// Only used by the leader
+    /// # Arguments
+    /// * `ride_request` - The ride request to send
+    /// * `addr` - The address of the driver
     fn pause_and_restart_driver_search(&mut self, ride_request: RideRequest, addr: Addr<Self>) -> Result<(), io::Error> {
 
         actix::spawn(async move {
-
-            // Simula espera
+            // Sleep for a while and then restart the driver search
             tokio::time::sleep(Duration::from_secs(RESTART_DRIVER_SEARCH_INTERVAL)).await;
 
             let response = RestartDriverSearch {
                 passenger_id: ride_request.id,
             };
-
+            // Restart the driver search
             addr.do_send(response);
-
         });
         Ok(())
     }
 
     /// Handles the payment rejected message from the payment app
+    /// Only used by the leader
     /// Sends the payment rejected message to the passenger
     pub fn handle_payment_rejected_as_leader(&mut self, msg: PaymentRejected, ctx: &mut Context<Self>) -> Result<(), io::Error> {
         self.send_message_to_passenger(MessageType::PaymentRejected(msg), msg.id, ctx)?;
@@ -496,6 +512,8 @@ impl Driver {
 
     /// Handles the accept ride message from the driver
     /// Removes the passenger id from ride_and_offers
+    /// # Arguments
+    /// * `msg` - The message containing the AcceptRide
     pub fn handle_accept_ride_as_leader(&mut self, msg: AcceptRide) -> Result<(), io::Error> {
         // Remove the passenger ID from ride_and_offers in case the passenger wants to take another ride
         if let Err(e) = self.ride_manager.remove_from_ride_and_offers(msg.passenger_id) {
@@ -511,22 +529,26 @@ impl Driver {
     /// Sends the ride request to the next closest driver and adds the driver to the offers
     /// # Arguments
     /// * `msg` - The message containing the Declined Ride
+    /// * `ctx` - The context of the driver
     pub fn handle_declined_ride_as_leader(&mut self, msg: DeclineRide, addr: Addr<Self>, ctx: &mut Context<Self>) -> Result<(), io::Error> {
         let ride_request = self.ride_manager.get_pending_ride_request(msg.passenger_id)?;
 
-        // vuelvo a buscar el driver mas cercano
+        // Search for another driver and send the ride request
         self.search_driver_and_send_ride(ride_request, addr, ctx)?;
 
         Ok(())
     }
 
-    /// Handles the RestartDriverSearch message
+    /// Handles the RestartDriverSearch message, only used by the leader
+    /// Restarts the driver search for the passenger
     /// # Arguments
     /// * `msg` - The message containing the RestartDriverSearch
+    /// * `ctx` - The context of the driver
     pub fn handle_restart_driver_search_as_leader(&mut self, msg: RestartDriverSearch, addr: Addr<Self>, ctx: &mut Context<Self>) -> Result<(), io::Error> {
         let ride_request = self.ride_manager.get_pending_ride_request(msg.passenger_id)?;
 
-        // vuelvo a buscar el driver mas cercano
+        // Search for another driver and send the ride request
+        // todo: esto es igual a lo de arruba, deberiamos borrar este mensaje y que se envie un declined ride en pause_And_restart...
         self.search_driver_and_send_ride(ride_request, addr, ctx)?;
 
         Ok(())
@@ -536,6 +558,7 @@ impl Driver {
     /// Removes the ride from the pending rides and sends the FinishRide message to the passenger
     /// # Arguments
     /// * `msg` - The message containing the FinishRide
+    /// * `ctx` - The context of the driver
     pub fn handle_finish_ride_as_leader(&mut self, msg: FinishRide, ctx: &mut Context<Self>) -> Result<(), io::Error> {
         // Remove the ride from the pending rides
         // todo: ver manejo de errores, la funcion esta la hardcodee para que no devuelva un error
