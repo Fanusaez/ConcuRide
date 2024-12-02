@@ -19,7 +19,7 @@ impl Actor for Driver {
     /// Starts the ping system if the driver is the leader
     fn started(&mut self, ctx: &mut Self::Context) {
         if self.is_leader.load(Ordering::SeqCst) {
-            self.start_ping_system(ctx.address());
+            self.start_ping_system(ctx.address(), ctx);
         }
         else {
             self.check_leader_alive(ctx.address());
@@ -97,9 +97,9 @@ impl Handler<RideRequest> for Driver {
         if self.is_leader.load(Ordering::SeqCst) {
             // todo: ojo, si el pasajero se reconcto no deberia imprimirse esto, en handle_ride_request_as_leader se maneja y hay otro TODO
             log(&format!("LEADER RECEIVED RIDE REQUEST FROM PASSENGER {}", msg.id), "DRIVER");
-            self.handle_ride_request_as_leader(msg).expect("Error handling ride request as leader");
+            self.handle_ride_request_as_leader(msg, ctx).expect("Error handling ride request as leader");
         } else {
-            self.handle_ride_request_as_driver(msg, ctx.address()).expect("Error handling ride request as driver");
+            self.handle_ride_request_as_driver(msg, ctx.address(), ctx).expect("Error handling ride request as driver");
         }
     }
 }
@@ -112,7 +112,7 @@ impl Handler<PaymentAccepted> for Driver {
     /// Handles the payment accepted message
     fn handle(&mut self, msg: PaymentAccepted, ctx: &mut Self::Context) -> Self::Result {
         if self.is_leader.load(Ordering::SeqCst) {
-            self.handle_payment_accepted_as_leader(msg, ctx.address()).unwrap();
+            self.handle_payment_accepted_as_leader(msg, ctx.address(), ctx).unwrap();
         }
         else {
             eprintln!("Driver {} is not the leader, should not receive this message", self.id);
@@ -126,7 +126,7 @@ impl Handler<PaymentRejected> for Driver {
     fn handle(&mut self, msg: PaymentRejected, ctx: &mut Self::Context) -> Self::Result {
         if self.is_leader.load(Ordering::SeqCst) {
             log(&format!("PAYMENT REJECTED FOR PASSENGER {}", msg.id), "DRIVER");
-            self.handle_payment_rejected_as_leader(msg).unwrap();
+            self.handle_payment_rejected_as_leader(msg, ctx).unwrap();
         }
         else {
             eprintln!("Driver {} is not the leader, should not receive this message", self.id);
@@ -157,7 +157,7 @@ impl Handler<DeclineRide> for Driver {
     fn handle(&mut self, msg: DeclineRide, ctx: &mut Self::Context) -> Self::Result {
         if self.is_leader.load(Ordering::SeqCst) {
             log(&format!("RIDE REQUEST {} WAS DECLINED BY DRIVER {}", msg.passenger_id, msg.driver_id, ), "DRIVER");
-            match self.handle_declined_ride_as_leader(msg, ctx.address()) {
+            match self.handle_declined_ride_as_leader(msg, ctx.address(), ctx) {
                 Ok(_) => {}
                 Err(e) => {
                     eprintln!("Error handling declined ride as leader: {:?}", e);
@@ -177,11 +177,11 @@ impl Handler<FinishRide> for Driver {
     fn handle(&mut self, msg: FinishRide, ctx: &mut Self::Context) -> Self::Result {
         if self.is_leader.load(Ordering::SeqCst) {
             log(&format!("RIDE REQUEST {} WAS FINISHED BY DRIVER {}", msg.passenger_id, msg.driver_id, ), "DRIVER");
-            self.handle_finish_ride_as_leader(msg).unwrap();
+            self.handle_finish_ride_as_leader(msg, ctx).unwrap();
         } else {
             // driver send FinishRide to the leader and change state to Idle
             log(&format!("RIDE REQUEST {} WAS FINISHED BY DRIVER {}", msg.passenger_id, msg.driver_id, ), "DRIVER");
-            self.handle_finish_ride_as_driver(msg, ctx.address()).unwrap()
+            self.handle_finish_ride_as_driver(msg, ctx.address(), ctx).unwrap()
         }
     }
 }
@@ -192,7 +192,7 @@ impl Handler<RestartDriverSearch> for Driver {
     /// Handles the restart driver search message
     fn handle(&mut self, msg: RestartDriverSearch, ctx: &mut Self::Context) -> Self::Result {
         if self.is_leader.load(Ordering::SeqCst) {
-            self.handle_restart_driver_search_as_leader(msg, ctx.address()).unwrap();
+            self.handle_restart_driver_search_as_leader(msg, ctx.address(), ctx).unwrap();
         } else {
             eprintln!("Driver {} is not the leader, should not receive this message", self.id);
         }
@@ -213,6 +213,21 @@ impl Handler<StreamMessage> for Driver {
     }
 }
 
+impl Handler<WriteHalfLeader> for Driver {
+    type Result = ();
+
+    /// Handles the write half leader message, this message is received when the driver is the leader
+    /// The driver will store the write half of the stream in the leader_write_half attribute
+    fn handle(&mut self, msg: WriteHalfLeader, _ctx: &mut Self::Context) -> Self::Result {
+        if self.is_leader.load(Ordering::SeqCst) {
+            debug!("No deberia recibir este mensaje como lider")
+        }
+        else {
+            self.handle_write_half_leader_as_driver(msg).unwrap();
+        }
+    }
+}
+
 /// Handles the new connection message, this message is received as a handshake between the driver and the passenger
 /// The driver will store the passenger id and the write half of the stream in the passengers_write_half hashmap
 /// If the passenger was already connected, the previous connection will be removed
@@ -221,18 +236,17 @@ impl Handler<StreamMessage> for Driver {
 impl Handler<NewConnection> for Driver {
     type Result = ();
 
-    fn handle(&mut self, msg: NewConnection, _ctx: &mut Self::Context) -> Self::Result {
-        let mut passengers_write_half = self.passengers_write_half.write().unwrap();
+    fn handle(&mut self, msg: NewConnection, ctx: &mut Self::Context) -> Self::Result {
         let new_passenger_id = msg.passenger_id;
         let old_passenger_id = msg.used_port;
 
         // Ver si ya estaba la conexion con el pasajero
-        let previous_connection = passengers_write_half.contains_key(&new_passenger_id);
+        let previous_connection = self.passengers_write_half.contains_key(&new_passenger_id);
 
         // en caso de reconexion, borrar la conexion anterior
         if previous_connection {
             log(&format!("RE-CONNECTED WITH PASSENGER {}", new_passenger_id), "INFO");
-            match passengers_write_half.remove(&new_passenger_id) {
+            match self.passengers_write_half.remove(&new_passenger_id) {
                 Some(_write_half) => {
                     //eprintln!("Se eliminó la conexión anterior con el pasajero {}", new_passenger_id);
                 }
@@ -246,15 +260,15 @@ impl Handler<NewConnection> for Driver {
         }
 
         // Reemplazar la clave
-        if let Some(write_half_passenger) = passengers_write_half.remove(&old_passenger_id) {
-            passengers_write_half.insert(new_passenger_id, write_half_passenger);
+        if let Some(write_half_passenger) = self.passengers_write_half.remove(&old_passenger_id) {
+            self.passengers_write_half.insert(new_passenger_id, write_half_passenger);
         } else {
             eprintln!("No se encontró el puerto usado por el pasajero");
         }
 
         // si ya hubo alguna conexion, verificar que no haya un RideRequest pendiente
         if previous_connection {
-            self.verify_pending_ride_request(new_passenger_id).unwrap();
+            self.verify_pending_ride_request(new_passenger_id, ctx).unwrap();
         }
 
     }
@@ -278,7 +292,7 @@ impl Handler<Ping> for Driver {
             self.handle_ping_as_leader(msg).unwrap();
         } else {
             info!("{}", format!("PING RECEIVED FROM LEADER {}", msg.id_sender));
-            self.handle_ping_as_driver(msg).unwrap();
+            self.handle_ping_as_driver(msg, _ctx).unwrap();
         }
     }
 }
@@ -290,7 +304,7 @@ impl Handler<SendPingTo> for Driver {
 
     fn handle(&mut self, msg: SendPingTo, _ctx: &mut Self::Context) -> Self::Result {
         if self.is_leader.load(Ordering::SeqCst) {
-            self.send_ping_to_driver(msg.id_to_send).unwrap();
+            self.send_ping_to_driver(msg.id_to_send, _ctx).unwrap();
         } else {
             eprintln!("Driver {} is not the leader, should not receive this message", self.id);
         }
@@ -306,7 +320,7 @@ impl Handler<PositionUpdate> for Driver {
             self.handle_position_update_as_leader(msg).unwrap();
         }
         else {
-            self.handle_position_update_as_driver(msg).unwrap();
+            self.handle_position_update_as_driver(msg, _ctx).unwrap();
         }
     }
 }
@@ -375,12 +389,21 @@ impl Handler<NewLeaderAttributes> for Driver {
     fn handle(&mut self, msg: NewLeaderAttributes, ctx: &mut Self::Context) -> Self::Result {
         if self.is_leader.load(Ordering::SeqCst) {
             log("NEW LEADER ATTRIBUTES RECEIVED", "NEW_CONNECTION");
-            self.handle_new_leader_attributes_as_leader(msg, ctx.address()).unwrap();
+            self.handle_new_leader_attributes_as_leader(msg, ctx.address(), ctx).unwrap();
         }
         else {
             eprintln!("Driver {} is not the leader, should not receive this message", self.id);
         }
     }
+}
+
+impl Handler<NewPassengerHalfWrite> for Driver {
+    type Result = ();
+
+    fn handle(&mut self, msg: NewPassengerHalfWrite, _ctx: &mut Self::Context) -> Self::Result {
+        self.passengers_write_half.insert(msg.passenger_id, Some(msg.write_half.unwrap()));
+    }
+
 }
 
 impl Actor for LastPingManager {
