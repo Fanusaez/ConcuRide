@@ -49,6 +49,7 @@ const NO_DRIVER_AVAILABLE: u16 = 0;
 const PING_TIMEOUT: u64 = 7;
 const TIMEOUT: Duration = Duration::from_secs(5);
 const CHECK_LEADER_TIME: u64 = 5;
+const PORT_FOR_UDP: u16 = 4000;
 
 pub type FullStream = (Option<ReadHalf<TcpStream>>, Option<WriteHalf<TcpStream>>);
 
@@ -115,8 +116,8 @@ impl Driver {
         let mut payment_write_half: Option<WriteHalf<TcpStream>> = None;
         let mut payment_read_half: Option<ReadHalf<TcpStream>> = None;
 
-        // Leader election (tengo pensado usar los puertos 10001, 10002, ...)
-        let port_socket = port + 4000;
+        // UDP Socket for leader election
+        let port_socket = port + PORT_FOR_UDP;
         let socket = UdpSocket::bind(format!("127.0.0.1:{}", port_socket))?;
 
         // Remove the leader port from the list of drivers
@@ -1139,9 +1140,9 @@ impl Driver {
 /// ---------------------------------------------------------- LEADER ELECTION IMPLEMENTATION ---------------------------------------------------- ///
 
     /// Handles the dead leader message as a driver
-    /// Si estoy aca es porque me di cuenta que el lider murio
-    /// TODO: PROBLEMA: PUEDE QUE OTRO DRIVER TODAVIA NO SE HAYA DADO CUENTA QUE EL LIDER SE CAYO, Y SI ENVIO EL MENSAJE NADIE VA A LEER.
-
+    /// Starts the election process
+    /// # Arguments
+    /// * `addr` - The address of the driver
     pub fn handle_dead_leader_as_driver(&mut self, addr: Addr<Driver>) -> Result<(), io::Error> {
 
         self.state = States::LeaderLess;
@@ -1154,7 +1155,6 @@ impl Driver {
         let stop_clone = stop.clone();
         let got_ack = Arc::new((Mutex::new(None), Condvar::new()));
         let leader_id =  Arc::new((Mutex::new(None), Condvar::new()));
-        //let drivers_id_arc = Arc::new(RwLock::new(drivers_id));
         let drivers_id_for_leader = Arc::new(RwLock::new(Vec::new()));
 
         // Lanzar un hilo para el proceso de elección
@@ -1335,7 +1335,7 @@ impl Driver {
         }
 
         // 4000 para que sean 10001, 10002 etc
-        let target_address = format!("127.0.0.1:{}", next_id + 4000);
+        let target_address = format!("127.0.0.1:{}", next_id + PORT_FOR_UDP);
 
         //println!("Enviando mensaje a {}", next_id);
         // Enviar el mensaje
