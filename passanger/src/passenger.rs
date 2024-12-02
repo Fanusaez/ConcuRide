@@ -1,14 +1,10 @@
 use std::cmp::PartialEq;
-use std::hash::Hash;
 use std::io;
-use std::thread::sleep;
-use actix::{Actor, Context, StreamHandler, ActorFutureExt, Handler, Addr, AsyncContext, ActorContext};
+use actix::{Actor, Context, StreamHandler, Handler, Addr, AsyncContext, ActorContext};
 use actix_async_handler::async_handler;
 use tokio::io::{split, AsyncBufReadExt, AsyncWriteExt, BufReader, WriteHalf};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_stream::wrappers::LinesStream;
-use tokio::net::TcpSocket;
-use tokio::net::unix::pid_t;
 use crate::{utils, LEADER_PORT};
 use crate::models::*;
 
@@ -24,20 +20,15 @@ pub enum Sates {
 
 impl PartialEq for Sates {
     fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Sates::Idle, Sates::Idle) => true,
-            (Sates::WaitingDriver, Sates::WaitingDriver) => true,
-            (Sates::Traveling, Sates::Traveling) => true,
-            _ => false,
-        }
+        matches!((self, other), (Sates::Idle, Sates::Idle) |
+            (Sates::WaitingDriver, Sates::WaitingDriver) |
+            (Sates::Traveling, Sates::Traveling))
     }
 }
 
 pub struct Passenger {
     /// The port of the passenger
     id: u16,
-    /// The port of the leader (6000 for now)
-    leader_port: u16,
     /// The actor that sends messages to the leader
     tcp_sender: Addr<TcpSender>,
     /// State of the passenger
@@ -133,7 +124,7 @@ impl Handler<DeclineRide> for Passenger {
 impl Handler<PaymentRejected> for Passenger {
     type Result = ();
 
-    fn handle(&mut self, msg: PaymentRejected, _ctx: &mut Self::Context) -> Self::Result {
+    fn handle(&mut self, _msg: PaymentRejected, _ctx: &mut Self::Context) -> Self::Result {
         utils::log(&format!("PASSENGER WITH ID {} PAYMENT WAS REJECTED", self.id), "INFO");
         self.state = Sates::Idle;
     }
@@ -214,16 +205,16 @@ impl Passenger {
             addr.send(ride).await.unwrap();
         }
 
-        /// listen for connections
+        // listen for connections
         let listener = TcpListener::bind(format!("127.0.0.1:{}", port_id)).await?;
 
-        /// Aca entrara solo cuando se caiga el lider, y un nuevo lider queira restablecer la conexion
+        // Aca entrara solo cuando se caiga el lider, y un nuevo lider queira restablecer la conexion
         while let Ok((stream,  _)) = listener.accept().await {
 
             // TODO: cuando implemente mensajes, deberia escribirle al pasajero que se
             // cayo el antiguo lider y que se conecto uno nuevo
             // Deberia pasar el nuevo stream como un mensaje de actor, creo que en discord preguntaron
-            let (read, mut write) = split(stream);
+            let (read, write) = split(stream);
 
             // agrego el stream del nuevo lider
             addr.send(NewLeaderStreams {
@@ -249,7 +240,6 @@ impl Passenger {
     pub fn new(port: u16, tcp_sender: Addr<TcpSender>) -> Self {
         Passenger {
             id: port,
-            leader_port: LEADER_PORT,
             tcp_sender,
             state: Sates::Idle,
             rides: Vec::new(),
@@ -279,7 +269,7 @@ impl TcpSender {
 impl Handler<RideRequest> for TcpSender {
     type Result = ();
 
-    async fn handle(&mut self, msg: RideRequest, ctx: &mut Self::Context) -> Self::Result {
+    async fn handle(&mut self, msg: RideRequest, _ctx: &mut Self::Context) -> Self::Result {
         let mut write = self.write.take()
             .expect("No debería poder llegar otro mensaje antes de que vuelva por usar AtomicResponse");
 
@@ -300,7 +290,7 @@ impl Handler<RideRequest> for TcpSender {
 impl Handler<NewConnection> for TcpSender {
     type Result = ();
 
-    async fn handle(&mut self, msg: NewConnection, ctx: &mut Self::Context) -> Self::Result {
+    async fn handle(&mut self, msg: NewConnection, _ctx: &mut Self::Context) -> Self::Result {
         let mut write = self.write.take()
             .expect("No debería poder llegar otro mensaje antes de que vuelva por usar AtomicResponse");
 
@@ -319,7 +309,7 @@ impl Handler<NewConnection> for TcpSender {
 
 impl Handler<StopActor> for TcpSender {
     type Result = ();
-    fn handle(&mut self, msg: StopActor, ctx: &mut Self::Context) -> Self::Result {
+    fn handle(&mut self, _msg: StopActor, ctx: &mut Self::Context) -> Self::Result {
         ctx.stop();
     }
 }
