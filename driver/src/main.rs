@@ -19,9 +19,9 @@ async fn main() -> std::io::Result<()> {
     let initial_position : (i32, i32) = (args[2].parse::<i32>().unwrap(), args[3].parse::<i32>().unwrap());
 
     // read from config file
-    let drivers_ports = read_config_file(CONFIG_PATH)?;
+    let (drivers_ports, passengers_port) = read_config_file(CONFIG_PATH)?;
 
-    Driver::start(port, drivers_ports, initial_position).await?;
+    Driver::start(port, drivers_ports, initial_position, passengers_port).await?;
 
     Ok(())
 }

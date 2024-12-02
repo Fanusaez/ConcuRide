@@ -29,18 +29,24 @@ pub fn calculate_price(ride_request: RideRequest) -> u16 {
 }
 
 /// Reads the configuration file and extracts the drivers ports
-pub fn read_config_file(path: &str) -> Result<Vec<u16>, io::Error> {
+pub fn read_config_file(path: &str) -> Result<(Vec<u16>, Vec<u16>), io::Error> {
     let file = File::open(path)?;
     let reader = BufReader::new(file);
 
-    let mut drivers_ports = Vec::new();
-    for line in reader.lines() {
-        let line = line?;
-        if let Ok(number) = line.trim().parse::<u16>() {
-            drivers_ports.push(number);
-        }
-    }
-    Ok(drivers_ports)
+    let mut lines = reader.lines();
+    let drivers_ports = if let Some(line) = lines.next() {
+        line?.split(',').filter_map(|s| s.trim().parse::<u16>().ok()).collect()
+    } else {
+        Vec::new()
+    };
+
+    let passengers_ports = if let Some(line) = lines.next() {
+        line?.split(',').filter_map(|s| s.trim().parse::<u16>().ok()).collect()
+    } else {
+        Vec::new()
+    };
+
+    Ok((drivers_ports, passengers_ports))
 }
 
 /// TODO: CONSIDERAR PASAR A UN ARCHIVO DE LOGS Y MODULARIZAR

@@ -96,15 +96,13 @@ impl Driver {
     /// # Arguments
     /// * `port` - The port of the driver
     /// * `drivers_ports` - The list of driver ports TODO (leader should try to connect to them)
-    pub async fn start(port: u16, mut drivers_ports: Vec<u16>, position: (i32, i32)) -> Result<(), io::Error> {
+    pub async fn start(port: u16, mut drivers_ports: Vec<u16>, position: (i32, i32), passengers_id: Vec<u16>, ) -> Result<(), io::Error> {
         // Driver-leader attributes
         let should_be_leader = port == drivers_ports[LIDER_PORT_IDX];
         let is_leader = should_be_leader;
         let is_leader_arc = Arc::new(AtomicBool::new(is_leader));
         let leader_port = drivers_ports[LIDER_PORT_IDX];
         let last_ping_manager = LastPingManager { last_ping: Instant::now() }.start();
-        // todo: ver para no hardcodear esto
-        let passengers_id = vec![9000];
 
         // Auxiliar structures
         let mut active_drivers: HashMap<u16, FullStream> = HashMap::new();
@@ -169,7 +167,6 @@ impl Driver {
                 socket: Arc::new(socket),
                 drivers_id,
                 passengers_id,
-
             }
         });
 
@@ -448,6 +445,11 @@ impl Driver {
 
         // Insert the ride in paid rides
         self.ride_manager.insert_ride_in_paid_rides(msg.id, msg)?;
+
+        if self.id == 6002 {
+            println!("drivers disponibles: {:?}", self.active_drivers.keys());
+            println!("drivers last position: {:?}", self.drivers_last_position);
+        }
 
         Ok(())
     }
@@ -731,6 +733,12 @@ impl Driver {
     /// * `msg` - The message containing the position update
     pub fn handle_position_update_as_leader(&mut self, msg: PositionUpdate) -> Result<(), io::Error> {
         info!("UPDATING DRIVER {} POSITION TO {:?}", msg.driver_id, msg.position);
+        // if the driver is the leader, update the driver's position
+        if msg.driver_id == self.id {
+            self.position = msg.position;
+            return Ok(());
+
+        }
         self.drivers_last_position.insert(msg.driver_id, msg.position);
         Ok(())
     }
@@ -951,7 +959,7 @@ impl Driver {
                 async move {
                     let mut write_half = write_half;
                     if let Err(e) = write_half.write_all(format!("{}\n", serialized).as_bytes()).await {
-                        log::debug!("Error al enviar el mensaje al líder: {}", e);
+                        debug!("Error al enviar el mensaje al líder: {}", e);
                     }
 
                     // Devolver el `write_half` al actor
