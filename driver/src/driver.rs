@@ -3,19 +3,15 @@ use std::collections::HashMap;
 use std::{io, thread};
 use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::time::Duration;
-use actix::{Actor, Addr, AsyncContext, StreamHandler, Context, Handler, Message, WrapFuture};
-use actix::clock::Sleep;
-use tokio::io::{split, AsyncBufReadExt, BufReader, AsyncWriteExt, WriteHalf, AsyncReadExt, ReadHalf};
+use actix::{Actor, Addr, AsyncContext, StreamHandler, Context, WrapFuture};
+use tokio::io::{split, AsyncBufReadExt, BufReader, AsyncWriteExt, WriteHalf, ReadHalf};
 use tokio::net::{TcpListener, TcpStream};
-use std::net::{SocketAddr, UdpSocket};
+use std::net::{UdpSocket};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::thread::sleep;
-use futures::SinkExt;
 use tokio_stream::wrappers::LinesStream;
-use actix::MessageResult;
 use actix::prelude::*;
 
-use crate::{init, utils};
+use crate::{init};
 use crate::models::*;
 use crate::utils::*;
 use crate::ride_manager::*;
@@ -34,11 +30,7 @@ pub enum States {
 
 impl PartialEq for States{
     fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (States::Driving, States::Driving) => true,
-            (States::Idle, States::Idle) => true,
-            _ => false,
-        }
+        matches!((self, other), (States::Driving, States::Driving) | (States::Idle, States::Idle))
     }
 }
 
@@ -57,6 +49,8 @@ const NO_DRIVER_AVAILABLE: u16 = 0;
 const PING_TIMEOUT: u64 = 7;
 const TIMEOUT: Duration = Duration::from_secs(5);
 
+pub type FullStream = (Option<ReadHalf<TcpStream>>, Option<WriteHalf<TcpStream>>);
+
 pub struct Driver {
     /// The port of the driver
     pub id: u16,
@@ -71,7 +65,7 @@ pub struct Driver {
     /// Liders last ping
     pub last_ping_by_leader: Addr<LastPingManager>,
     /// The connections to the drivers
-    pub active_drivers: HashMap<u16, (Option<ReadHalf<TcpStream>>, Option<WriteHalf<TcpStream>>)>,
+    pub active_drivers: HashMap<u16, FullStream>,
     /// ID's of Dead Drivers
     pub dead_drivers: Vec<u16>,
     /// States of the driver
@@ -105,16 +99,15 @@ impl Driver {
         let should_be_leader = port == drivers_ports[LIDER_PORT_IDX];
         let is_leader = should_be_leader;
         let is_leader_arc = Arc::new(AtomicBool::new(is_leader));
-        let leader_port = drivers_ports[LIDER_PORT_IDX].clone();
+        let leader_port = drivers_ports[LIDER_PORT_IDX];
         let last_ping_manager = LastPingManager { last_ping: Instant::now() }.start();
-        let mut passengers_id = Vec::new();
-        // todo: ver eesto
-        passengers_id.push(9000);
+        // todo: ver para no hardcodear esto
+        let passengers_id = vec![9000];
 
         // Auxiliar structures
-        let mut active_drivers: HashMap<u16, (Option<ReadHalf<TcpStream>>, Option<WriteHalf<TcpStream>>)> = HashMap::new();
+        let mut active_drivers: HashMap<u16, FullStream> = HashMap::new();
         let mut drivers_last_position: HashMap<u16, (i32, i32)> = HashMap::new();
-        let mut passengers_write_half: HashMap<u16, Option<WriteHalf<TcpStream>>> = HashMap::new();
+        let  passengers_write_half: HashMap<u16, Option<WriteHalf<TcpStream>>> = HashMap::new();
         let mut drivers_status: HashMap<u16, DriverStatus> = HashMap::new();
 
         // Payment app and connection
@@ -124,10 +117,6 @@ impl Driver {
         // Leader election (tengo pensado usar los puertos 10001, 10002, ...)
         let port_socket = port + 4000;
         let socket = UdpSocket::bind(format!("127.0.0.1:{}", port_socket))?;
-
-        // TODO: Y ESTO?
-        let unpaid_rides: Arc<RwLock<HashMap<u16, RideRequest>>>= Arc::new(RwLock::new(HashMap::new()));
-        let stop_pings = Arc::new(AtomicBool::new(false));
 
         // Remove the leader port from the list of drivers
         drivers_ports.remove(LIDER_PORT_IDX);
@@ -149,21 +138,23 @@ impl Driver {
 
 
         let driver = Driver::create(|ctx| {
-            /// asocio todos los reads de los drivers al lider
+            // Associates the drivers and payment streams to the leader
             if should_be_leader {
-                // Asociar streams de los conductores
-                associate_driver_streams(ctx, &mut active_drivers);
 
-                // Asociar el stream del servicio de pagos
-                associate_payment_stream(ctx, payment_read_half);
+                if let Err(e) = associate_driver_streams(ctx, &mut active_drivers) {
+                    debug!("Error al asociar los streams de los drivers: {:?}", e);
+                }
+                if let Err(e) = associate_payment_stream(ctx, payment_read_half) {
+                    debug!("Error al asociar los streams de los pagos: {:?}", e);
+                }
 
             }
             Driver {
                 id: port,
-                position, // Arrancan en el origen por comodidad, ver despues que onda
+                position,
                 is_leader: is_leader_arc.clone(),
-                leader_port: leader_port.clone(),
-                last_ping_by_leader: last_ping_manager, // porque le ponian clone?
+                leader_port,
+                last_ping_by_leader: last_ping_manager,
                 active_drivers,
                 dead_drivers: Vec::new(),
                 write_half_to_leader: None,
@@ -200,7 +191,7 @@ impl Driver {
     /// * `active_drivers_arc` - The arc of the active drivers
     pub fn associate_drivers_stream(
         ctx: &mut Context<Driver>,
-        active_drivers: &mut HashMap<u16, (Option<ReadHalf<TcpStream>>, Option<WriteHalf<TcpStream>>)>)
+        active_drivers: &mut HashMap<u16, FullStream>)
         -> Result<(), io::Error>
     {
         for (id, (read, _)) in active_drivers.iter_mut() {
@@ -437,10 +428,10 @@ impl Driver {
         // obtengo el ride request del unpaid_rides y lo elimino del hashmap
         let ride_request = self.ride_manager.remove_unpaid_ride(msg.id)?;
 
-        /// saves ride in pending_rides
+        // saves ride in pending_rides
         self.ride_manager.insert_ride_in_pending(ride_request)?;
 
-        /// Busco el driver mas cercano y le envio el RideRequest
+        // Busco el driver mas cercano y le envio el RideRequest
         self.search_driver_and_send_ride(ride_request, addr, ctx)?;
 
         // Inserto el id y el pago en la lista de viajes pagos
@@ -456,7 +447,7 @@ impl Driver {
     fn search_driver_and_send_ride(&mut self, ride_request: RideRequest, addr: Addr<Self>, ctx: &mut Context<Self>) -> Result<(), io::Error> {
         let driver_id_to_send = self.get_closest_driver(ride_request);
 
-        /// Si no hay drivers disponibles
+        // Si no hay drivers disponibles
         if driver_id_to_send == NO_DRIVER_AVAILABLE {
             log(&format!("NO DRIVERS AVAILABLE RIGHT NOW FOR PASSENGER {}, TRYING AGAIN LATER", ride_request.id), "INFO");
 
@@ -469,10 +460,10 @@ impl Driver {
             return Ok(());
         }
 
-        /// Envio el mensaje al driver
+        // Envio el mensaje al driver
         self.send_message_to_driver(driver_id_to_send, MessageType::RideRequest(ride_request), ctx)?;
 
-        /// Agrego el id del driver al vector de ofertas
+        // Agrego el id del driver al vector de ofertas
         self.ride_manager.insert_in_rides_and_offers(ride_request.id, driver_id_to_send)?;
 
         Ok(())
@@ -480,7 +471,6 @@ impl Driver {
 
     /// Pause and restart the driver search, so we dont do a busy wait
     fn pause_and_restart_driver_search(&mut self, ride_request: RideRequest, addr: Addr<Self>) -> Result<(), io::Error> {
-        let ride_request_clone = ride_request.clone();
 
         actix::spawn(async move {
 
@@ -488,7 +478,7 @@ impl Driver {
             tokio::time::sleep(Duration::from_secs(RESTART_DRIVER_SEARCH_INTERVAL)).await;
 
             let response = RestartDriverSearch {
-                passenger_id: ride_request_clone.id,
+                passenger_id: ride_request.id,
             };
 
             addr.do_send(response);
@@ -680,24 +670,23 @@ impl Driver {
     /// # Arguments
     /// * `msg` - The message containing the ride request
     /// * `addr` - The address of the driver
-    fn drive_and_finish(&mut self, ride_request_msg: RideRequest, addr: Addr<Self>) -> Result<(), io::Error> {
-        let msg_clone = ride_request_msg.clone();
-        let driver_id = self.id.clone();
+    fn drive_and_finish(&mut self, msg: RideRequest, addr: Addr<Self>) -> Result<(), io::Error> {
+        let driver_id = self.id;
         // todo: ver duracion, lo hardcodee abajo
-        let duration = calculate_travel_duration(&msg_clone);
+        let _duration = calculate_travel_duration(&msg);
 
         actix::spawn(async move {
-            let mut current_position = (msg_clone.x_origin, msg_clone.y_origin);
+            let mut current_position = (msg.x_origin, msg.y_origin);
             let advancement = 10;  // Dividir el viaje en 10 pasos
-            let x_km = (msg_clone.x_dest as i32 - msg_clone.x_origin as i32) as f64 / advancement as f64;
-            let y_km = (msg_clone.y_dest as i32 - msg_clone.y_origin as i32) as f64 / advancement as f64;
+            let x_km = (msg.x_dest as i32 - msg.x_origin as i32) as f64 / advancement as f64;
+            let y_km = (msg.y_dest as i32 - msg.y_origin as i32) as f64 / advancement as f64;
 
             for i in 0..=advancement {
-                current_position.0 = (msg_clone.x_origin as f64 + x_km * i as f64) as u16;
-                current_position.1 = (msg_clone.y_origin as f64 + y_km * i as f64) as u16;
+                current_position.0 = (msg.x_origin as f64 + x_km * i as f64) as u16;
+                current_position.1 = (msg.y_origin as f64 + y_km * i as f64) as u16;
 
                 let position_update = PositionUpdate {
-                    driver_id: driver_id.clone(),
+                    driver_id,
                     position: (current_position.0 as i32, current_position.1 as i32),
                 };
 
@@ -707,15 +696,12 @@ impl Driver {
             }
 
             let finish_ride = FinishRide {
-                passenger_id: ride_request_msg.id,
+                passenger_id: msg.id,
                 driver_id,
             };
 
             addr.do_send(finish_ride);
         });
-
-        // Actualiza la posición final en el actor
-        self.position = (msg_clone.x_dest.into(), msg_clone.y_dest.into());
 
         Ok(())
     }
@@ -728,6 +714,7 @@ impl Driver {
     }
 
     pub fn handle_position_update_as_driver(&mut self, msg: PositionUpdate, ctx: &mut Context<Self>) -> Result<(), io::Error> {
+        self.position = msg.position;
         // si no tengo lider no actualizo mi posicion
         if self.state != States::LeaderLess {
             self.send_message_to_leader(MessageType::PositionUpdate(msg), ctx)?;
@@ -785,8 +772,8 @@ impl Driver {
     }
 
     async fn initialize_new_leader(drivers_id: Vec<u16>, addr: Addr<Driver>) {
-        let mut drivers_id = drivers_id.clone();
-        let mut active_drivers: HashMap<u16, (Option<ReadHalf<TcpStream>>, Option<WriteHalf<TcpStream>>)> = HashMap::new();
+        let drivers_id = drivers_id.clone();
+        let mut active_drivers: HashMap<u16, FullStream> = HashMap::new();
         let mut drivers_last_position: HashMap<u16, (i32, i32)> = HashMap::new();
         let mut drivers_status: HashMap<u16, DriverStatus> = HashMap::new();
 
@@ -821,7 +808,7 @@ impl Driver {
 
         addr.do_send(StreamMessage{stream: msg.payment_read_half});
 
-        /// envio los streams de lectura para incorporarlos
+        // envio los streams de lectura para incorporarlos
         for (id, (read, _)) in self.active_drivers.iter_mut() {
             if let Some(read_half) = read.take() {
                 addr.do_send(StreamMessage{stream: Some(read_half)});
@@ -848,7 +835,6 @@ impl Driver {
 
     fn connect_to_passengers_as_new_leader(&self, addr: Addr<Driver>) -> Result<(), io::Error> {
         let passengers_id = self.passengers_id.clone();
-        let leader_id = self.id;
         tokio::spawn(async move {
             for passenger_id in passengers_id {
                 // puede pasar que el driver no este conectado
@@ -859,7 +845,7 @@ impl Driver {
                         continue;
                     }
                 };
-                let (read, mut write) = split(stream);
+                let (read, write) = split(stream);
                 // envio read, write y id para agregarlo
                 addr.do_send(NewPassengerConnection { passenger_id, read, write });
             }
@@ -1154,7 +1140,7 @@ impl Driver {
 
         // clono y envio mensaje inicial
          let socket_clone = socket.clone();
-         let id_clone = id.clone();
+         let id_clone = id;
          let got_ack_clone = got_ack.clone();
          let msg = serde_json::to_vec(&initial_msg).unwrap();
          let drivers_id_clone = drivers_id.clone();
@@ -1181,7 +1167,7 @@ impl Driver {
             };
 
             match message {
-                RingMessage::ACK { id_origin } => {
+                RingMessage::Ack { id_origin } => {
                     let (lock, cvar) = &*got_ack;
                     {
                         let mut got_ack = lock.lock().unwrap_or_else(|poisoned| {
@@ -1194,7 +1180,7 @@ impl Driver {
                 }
                 RingMessage::Election { mut participants } => {
                     // Envio ACK
-                    let ack_msg = RingMessage::ACK { id_origin: id };
+                    let ack_msg = RingMessage::Ack { id_origin: id };
                     let serialized_ack = serde_json::to_vec(&ack_msg).unwrap();
                     if let Err(e) = socket.send_to(&serialized_ack, addr) {
                         debug!("Error al enviar mensaje de ack: {}", e);
@@ -1209,8 +1195,7 @@ impl Driver {
 
                         //println!("ENVIANDO MENSAJE DE COORDINADOR");
                         let leader_id = *participants.iter().max().unwrap();
-                        let mut participants_election = Vec::new();
-                        participants_election.push(id);
+                        let participants_election = vec![id];
                         let msg_to_send = RingMessage::Coordinator {
                             leader_id,
                             participants: participants_election,
@@ -1228,7 +1213,7 @@ impl Driver {
 
                         // clono y envio mensaje
                         let socket_clone = socket.clone();
-                        let id_clone = id.clone();
+                        let id_clone = id;
                         let got_ack_clone = got_ack.clone();
                         let msg = serde_json::to_vec(&msg_to_send).unwrap();
                         let drivers_id_clone= drivers_id.clone();
@@ -1242,8 +1227,8 @@ impl Driver {
                     *leader_id_cond.0.lock().unwrap() = Some(leader_id);
                     leader_id_cond.1.notify_all();
 
-                    // Envio ACK
-                    let ack_msg = RingMessage::ACK { id_origin: id };
+                    // Envio Ack
+                    let ack_msg = RingMessage::Ack { id_origin: id };
                     let serialized_ack = serde_json::to_vec(&ack_msg).unwrap();
                     if let Err(e) = socket.send_to(&serialized_ack, addr) {
                         debug!("Error al enviar mensaje de ack: {}", e);
@@ -1256,7 +1241,7 @@ impl Driver {
                         let msg_to_send = RingMessage::Coordinator { leader_id, participants };
                         let serialized_message = serde_json::to_vec(&msg_to_send).unwrap();
                         let socket_clone = socket.clone();
-                        let id_clone = id.clone();
+                        let id_clone = id;
                         let got_ack_clone = got_ack.clone();
                         let drivers_id_clone = drivers_id.clone();
                         thread::spawn(move || {
@@ -1273,7 +1258,7 @@ impl Driver {
         socket: Arc<UdpSocket>,
         msg: Vec<u8>,
         current_id: u16,
-        got_ack: Arc<(Mutex<Option<u16>>, Condvar)>, // Para manejar el ACK
+        got_ack: Arc<(Mutex<Option<u16>>, Condvar)>, // Para manejar el Ack
         drivers_id: Vec<u16>,
     ) {
 
@@ -1298,10 +1283,10 @@ impl Driver {
         let got_ack = got_ack.1.wait_timeout_while(got_ack.0.lock().unwrap(), TIMEOUT, |got_it| got_it.is_none() || got_it.unwrap() != next_id );
         if got_ack.unwrap().1.timed_out() {
             // Si se agotó el tiempo, reintentar con el siguiente
-            //println!("[{}] Timeout esperando ACK de {}", current_id, next_id);
+            //println!("[{}] Timeout esperando Ack de {}", current_id, next_id);
             Self::safe_send_next(socket, msg, next_id, got_ack_clone, drivers_id);
         } else {
-            //println!("[{}] ACK recibido de {}", current_id, next_id);
+            //println!("[{}] Ack recibido de {}", current_id, next_id);
         }
     }
 }

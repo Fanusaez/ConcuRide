@@ -2,9 +2,9 @@ use std::collections::HashMap;
 use actix::Message;
 use serde::{Deserialize, Serialize};
 use tokio::io::{ReadHalf, WriteHalf};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::{TcpStream};
 use std::time::Instant;
-use crate::driver::DriverStatus;
+use crate::driver::{DriverStatus, FullStream};
 
 /// RideRequest struct, ver como se puede importar desde otro archivo, esto esta en utils.rs\
 #[derive(Serialize, Deserialize, Message, Debug, Clone, Copy)]
@@ -144,7 +144,7 @@ pub struct PassengerNewLeader {
 #[derive(Message, Debug)]
 #[rtype(result = "()")]
 pub struct NewLeaderAttributes {
-    pub active_drivers: HashMap<u16, (Option<ReadHalf<TcpStream>>, Option<WriteHalf<TcpStream>>)>,
+    pub active_drivers: HashMap<u16, FullStream>,
     pub drivers_last_position: HashMap<u16, (i32, i32)>,
     pub drivers_status: HashMap<u16, DriverStatus>,
     pub payment_write_half: Option<WriteHalf<TcpStream>>,
@@ -170,7 +170,7 @@ pub struct NewPassengerHalfWrite {
 pub enum RingMessage {
     Election { participants: Vec<u16> },
     Coordinator { leader_id: u16, participants: Vec<u16> },
-    ACK {id_origin: u16},
+    Ack {id_origin: u16},
 }
 
 #[derive(Message)]

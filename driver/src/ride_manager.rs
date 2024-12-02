@@ -5,8 +5,6 @@ use log::debug;
 use serde::{Deserialize, Serialize};
 use crate::models::*;
 
-const BACKUP_PATH: &str = "./backup.txt";
-
 #[derive(Serialize, Deserialize, Debug)]
 pub struct RideManager {
     /// Pending rides, already paid rides, waiting to be accepted by a driver
@@ -124,7 +122,7 @@ impl RideManager {
     /// * A copy of the RideRequest
     pub fn get_pending_ride_request(&self, passenger_id: u16) -> Result<RideRequest, io::Error> {
         if let Some(ride_request) = self.pending_rides.get(&passenger_id) {
-            Ok(ride_request.clone())
+            Ok(*ride_request)
         } else {
             debug!(
                 "RideRequest with id {} not found in pending_rides",
@@ -213,14 +211,14 @@ impl RideManager {
                         Ok(backup_data)
                     },
                     Err(e) => Err(io::Error::new(
-                        io::ErrorKind::InvalidData,
+                        ErrorKind::InvalidData,
                         format!("Error deserializing backup data: {}", e),
                     )),
                 }
             }
             Err(e) => {
                 println!("Backup non existing file: {}", e);
-                return Err(e);
+                Err(e)
             }
         }
     }

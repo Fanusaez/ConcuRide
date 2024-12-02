@@ -1,13 +1,12 @@
 use std::collections::HashMap;
 use std::io;
-use std::sync::{Arc, RwLock};
 use tokio::io::{split, ReadHalf, WriteHalf};
 use tokio::net::TcpStream;
-use crate::driver::DriverStatus;
+use crate::driver::{DriverStatus, FullStream};
 
 const PAYMENT_APP_PORT: u16 = 7500;
 
-pub async fn init_driver(drivers_connections: &mut HashMap<u16, (Option<ReadHalf<TcpStream>>, Option<WriteHalf<TcpStream>>)>,
+pub async fn init_driver(drivers_connections: &mut HashMap<u16, FullStream>,
                     drivers_ports: Vec<u16>,
                     drivers_last_position: &mut HashMap<u16, (i32, i32)>,
                     is_leader: bool,
@@ -26,7 +25,7 @@ pub async fn init_driver(drivers_connections: &mut HashMap<u16, (Option<ReadHalf
             drivers_connections.insert(*driver_port, (Some(read_half), Some(write_half)));
             drivers_last_position.insert(*driver_port, (0, 0));
         }
-        // Conexión con el servicio de pagos (TODO: DEBERIA CONECTARSE SOLO SI ES LIDER)
+        // Conexión con el servicio de pagos
         let payment_stream = TcpStream::connect(format!("127.0.0.1:{}", PAYMENT_APP_PORT)).await?;
         let (read_half, write_half) = split(payment_stream);
         *payment_write_half = Some(write_half);
@@ -35,7 +34,6 @@ pub async fn init_driver(drivers_connections: &mut HashMap<u16, (Option<ReadHalf
         Ok(())
     }
     else {
-        // TODO funcionalidad del driver que no es lider
         Ok(())
     }
 }

@@ -1,9 +1,7 @@
-use std::fmt::format;
 use std::io;
-use std::io::Error;
 use std::sync::atomic::Ordering;
-use tokio::io::{split, AsyncBufReadExt, BufReader, AsyncWriteExt, WriteHalf, AsyncReadExt, ReadHalf};
-use actix::{Actor, AsyncContext, Context, ContextFutureSpawner, Handler, StreamHandler, WrapFuture};
+use tokio::io::{AsyncBufReadExt, BufReader};
+use actix::{Actor, AsyncContext, Context, Handler, StreamHandler};
 use tokio_stream::wrappers::LinesStream;
 use actix::MessageResult;
 use log::*;
@@ -328,7 +326,7 @@ impl Handler<PositionUpdate> for Driver {
 
 impl Handler<PayRide> for Driver {
     type Result = ();
-    fn handle(&mut self, msg: PayRide, ctx: &mut Self::Context) -> Self::Result {
+    fn handle(&mut self, msg: PayRide, _ctx: &mut Self::Context) -> Self::Result {
         if self.is_leader.load(Ordering::SeqCst) {
             eprintln!("Leader should not receive payment message");
         } else {
@@ -354,7 +352,7 @@ impl Handler<DeadDriver> for Driver {
 impl Handler<DeadLeader> for Driver {
     type Result = ();
 
-    fn handle(&mut self, msg: DeadLeader, ctx: &mut Self::Context) -> Self::Result {
+    fn handle(&mut self, _msg: DeadLeader, ctx: &mut Self::Context) -> Self::Result {
         if self.is_leader.load(Ordering::SeqCst) {
             eprintln!("Leader should not receive DeadLeader message");
         }
