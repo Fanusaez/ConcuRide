@@ -276,8 +276,8 @@ impl Handler<NewConnection> for Driver {
 impl Handler<NewPassengerConnection> for Driver {
     type Result = ();
 
-    fn handle(&mut self, msg: NewPassengerConnection, _ctx: &mut Self::Context) -> Self::Result {
-        self.handle_new_passenger_connection_as_leader(msg, _ctx.address()).unwrap();
+    fn handle(&mut self, msg: NewPassengerConnection, ctx: &mut Self::Context) -> Self::Result {
+        self.handle_new_passenger_connection_as_leader(msg, ctx).unwrap();
     }
 }
 
