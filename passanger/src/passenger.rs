@@ -5,6 +5,7 @@ use actix_async_handler::async_handler;
 use tokio::io::{split, AsyncBufReadExt, AsyncWriteExt, BufReader, WriteHalf};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_stream::wrappers::LinesStream;
+use log::debug;
 use crate::{utils, LEADER_PORT};
 use crate::models::*;
 
@@ -18,6 +19,7 @@ pub enum Sates {
     Traveling,
 }
 
+/// Implement PartialEq for the Sates enum
 impl PartialEq for Sates {
     fn eq(&self, other: &Self) -> bool {
         matches!((self, other), (Sates::Idle, Sates::Idle) |
@@ -40,9 +42,8 @@ pub struct Passenger {
 impl Actor for Passenger {
     type Context = Context<Self>;
 
+    /// Override the stopping method to keep the actor running
     fn stopping(&mut self, _: &mut Self::Context) -> actix::Running {
-        // Evita que el actor muera mientras tenga streams activos
-        // TODO: puse esta condicion rando, se podria poner otra que sea mas logica
         actix::Running::Continue
     }
 
@@ -86,15 +87,16 @@ impl Handler<RideRequest> for Passenger {
             self.state = Sates::WaitingDriver;
             match self.tcp_sender.try_send(msg) {
                 Ok(_) => (),
-                Err(_) => println!("Error al enviar mensaje al TcpSender"),
+                Err(_) => debug!("Error sending message to TcpSender"),
             }
         } else {
-            // se pushea para ejecutarlo cuando se hace el dropoff del viaje actual
+            // If the passenger is idle, add the ride to the queue for later use
             self.rides.push(msg);
         }
     }
 }
 
+/// Handles FinishRide messages coming from the leader
 impl Handler<FinishRide> for Passenger {
     type Result = ();
 
@@ -111,7 +113,7 @@ impl Handler<FinishRide> for Passenger {
     }
 }
 
-
+/// Handles DeclineRide messages coming from the leader
 impl Handler<DeclineRide> for Passenger {
     type Result = ();
 
@@ -121,6 +123,7 @@ impl Handler<DeclineRide> for Passenger {
     }
 }
 
+/// Handles PaymentRejected messages coming from the leader
 impl Handler<PaymentRejected> for Passenger {
     type Result = ();
 
@@ -130,17 +133,22 @@ impl Handler<PaymentRejected> for Passenger {
     }
 }
 
+/// Handles NewConnection messages coming from main
+/// Sends the message of NewConnection to the TcpSender actor
 impl Handler<NewConnection> for Passenger {
     type Result = ();
 
     fn handle(&mut self, msg: NewConnection, _ctx: &mut Self::Context) -> Self::Result {
         match self.tcp_sender.try_send(msg) {
             Ok(_) => (),
-            Err(_) => println!("Error al enviar mensaje al TcpSender"),
+            Err(_) => debug!("Error sending message to TcpSender"),
         }
     }
 }
 
+/// Handles NewLeaderStreams messages
+/// Adds the new stream to the actor and creates a new TcpSender actor with the new write half of the leader
+/// it's an auto message that is sent when a new leader is appointed
 impl Handler<NewLeaderStreams> for Passenger {
     type Result = ();
     fn handle(&mut self, msg: NewLeaderStreams, _ctx: &mut Self::Context) -> Self::Result {
@@ -151,13 +159,16 @@ impl Handler<NewLeaderStreams> for Passenger {
             eprintln!("No se proporcionó un stream válido");
         }
         let write = msg.write_half;
+        // Stop the current TcpSender actor
         self.tcp_sender.do_send(StopActor);
+        // Create a new TcpSender actor with the new write half of the leader
         let addr_tcp = TcpSender::new(write).start();
         self.tcp_sender = addr_tcp;
-
     }
 }
 
+/// Handles RideRequestReconnection messages coming from the leader
+/// If passenger disconnected and reconnected wit a RideRequest ongoing, this message will arrive
 impl Handler<RideRequestReconnection> for Passenger {
     type Result = ();
 
@@ -208,15 +219,11 @@ impl Passenger {
         // listen for connections
         let listener = TcpListener::bind(format!("127.0.0.1:{}", port_id)).await?;
 
-        // Aca entrara solo cuando se caiga el lider, y un nuevo lider queira restablecer la conexion
+        // loop to accept all incoming connections, only used when new leader is appointed
         while let Ok((stream,  _)) = listener.accept().await {
-
-            // TODO: cuando implemente mensajes, deberia escribirle al pasajero que se
-            // cayo el antiguo lider y que se conecto uno nuevo
-            // Deberia pasar el nuevo stream como un mensaje de actor, creo que en discord preguntaron
             let (read, write) = split(stream);
 
-            // agrego el stream del nuevo lider
+            // add the new stream to the actor
             addr.send(NewLeaderStreams {
                 read: Some(read),
                 write_half: Some(write),
@@ -227,6 +234,7 @@ impl Passenger {
         Ok(())
     }
 
+    /// Creates the actor Passenger instance
     fn create_actor_instance(port: u16, stream: TcpStream) -> Addr<Passenger> {
         Passenger::create(|ctx| {
             let (read, write_half) = split(stream);
@@ -236,7 +244,6 @@ impl Passenger {
             Passenger::new(port, addr_tcp)
         })
     }
-
     pub fn new(port: u16, tcp_sender: Addr<TcpSender>) -> Self {
         Passenger {
             id: port,
@@ -265,6 +272,7 @@ impl TcpSender {
 }
 
 /// Handles RideRequest messages coming from the Passenger actor and sends them to the leader
+/// todo: aca hay que hacer un refactor, si lo unico que hace tcp sender es enviar los mensajes al lider
 #[async_handler]
 impl Handler<RideRequest> for TcpSender {
     type Result = ();
@@ -307,6 +315,7 @@ impl Handler<NewConnection> for TcpSender {
     }
 }
 
+/// Handles StopActor messages coming from the Passenger actor
 impl Handler<StopActor> for TcpSender {
     type Result = ();
     fn handle(&mut self, _msg: StopActor, ctx: &mut Self::Context) -> Self::Result {
