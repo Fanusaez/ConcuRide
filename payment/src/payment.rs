@@ -110,30 +110,9 @@ impl Handler<PaymentAccepted> for SocketWriter {
 
     /// Serializes and sends the message through the socket
     fn handle(&mut self, msg: PaymentAccepted, ctx: &mut Context<Self>) -> Self::Result {
-        let write_half = self.write_half.take().expect("Writer already closed!");
         let json_message = serde_json::to_string(&MessageType::PaymentAccepted(msg))
             .expect("Error serializing PaymentAccepted message");
-
-        ctx.spawn(
-            async move {
-                let mut write = write_half;
-
-                if let Err(e) = write
-                    .write_all(format!("{}\n", json_message).as_bytes())
-                    .await
-                {
-                    log::debug!("Error sending PaymentAccepted message: {}", e);
-                }
-
-                // Return the write_half after sending
-                write
-            }
-                .into_actor(self) // Convert the future into an actor's future
-                .map(|write_half, actor, _| {
-                    // Reinsert the write_half into the actor
-                    actor.write_half = Some(write_half);
-                }),
-        );
+        ctx.address().do_send(SendMessage {msg: json_message});
     }
 }
 
@@ -142,16 +121,23 @@ impl Handler<PaymentRejected> for SocketWriter {
 
     /// Serializes and sends the message through the socket
     fn handle(&mut self, msg: PaymentRejected, ctx: &mut Context<Self>) -> Self::Result {
-        let  write_half = self.write_half.take().expect("Writer already closed!");
         let json_message = serde_json::to_string(&MessageType::PaymentRejected(msg))
             .expect("Error serializing PaymentRejected message");
+        ctx.address().do_send(SendMessage {msg: json_message});
 
+    }
+}
+
+impl Handler<SendMessage> for SocketWriter {
+    type Result = ();
+    fn handle(&mut self, msg: SendMessage, ctx: &mut Context<Self>) {
+        let  write_half = self.write_half.take().expect("Writer already closed!");
         ctx.spawn(
             async move {
                 let mut write = write_half;
 
                 if let Err(e) = write
-                    .write_all(format!("{}\n", json_message).as_bytes())
+                    .write_all(format!("{}\n", msg.msg).as_bytes())
                     .await
                 {
                     log::debug!("Error sending PaymentAccepted message: {}", e);
@@ -166,7 +152,6 @@ impl Handler<PaymentRejected> for SocketWriter {
                     actor.write_half = Some(write_half);
                 }),
         );
-
     }
 }
 
@@ -197,7 +182,7 @@ impl Handler<SendPayment> for PaymentApp {
         if self.payment_is_accepted() {
             let payment_accepted = PaymentAccepted{id: msg.id, amount: msg.amount};
             log(&format!("PAYMENT ACCEPTED FOR RIDE {}", msg.id), "NEW_CONNECTION");
-            self.rides_and_payments.insert(msg.id, msg.amount); //Lo agrego a los viajes aceptados
+            self.rides_and_payments.insert(msg.id, msg.amount); // Add to accepted rides
             match self.writer.try_send(payment_accepted) {
                 Ok(_) => (),
                 Err(_) => println!("Error sending message to SocketWriter")

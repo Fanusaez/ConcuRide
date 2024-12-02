@@ -34,3 +34,9 @@ pub struct PaymentAccepted {
 pub struct PaymentRejected {
     pub id: u16,
 }
+
+#[derive(Serialize, Deserialize, Message, Debug, Clone)]
+#[rtype(result = "()")]
+pub struct SendMessage {
+    pub msg: String,
+}
