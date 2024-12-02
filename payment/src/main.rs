@@ -8,6 +8,7 @@ mod messages;
 
 use crate::payment::{SocketWriter, SocketReader};
 
+/// Default port used by the payment app to listen to new connections
 const DEFAULT_PORT: u16 = 7500;
 
 /// Main function. Creates the payment app, conformed by the actors

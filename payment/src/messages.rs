@@ -1,3 +1,5 @@
+//! Messages between actors of payment app or between payment app and leader driver
+
 use actix::Message;
 use serde::{Deserialize, Serialize};
 
