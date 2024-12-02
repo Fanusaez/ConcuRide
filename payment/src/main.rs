@@ -23,7 +23,7 @@ async fn main() -> std::io::Result<()> {
         let (read_half, write_half) = split(stream);
         payment::log("NEW CLIENT CONNECTED", "NEW_CONNECTION");
         // Creation of SocketWriter actor
-        let writer_addr = SocketWriter::new(write_half).start();
+        let writer_addr = SocketWriter::new(Some(write_half)).start();
 
         // Creation of PaymentApp actor
         let payment_app_addr = PaymentApp::new(writer_addr).start();

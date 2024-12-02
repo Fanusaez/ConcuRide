@@ -75,7 +75,7 @@ impl StreamHandler<Result<String, io::Error>> for SocketReader {
 
 /// Contains the wirte half of the socket
 pub struct SocketWriter {
-    write_half: Arc<RwLock<WriteHalf<TcpStream>>>,
+    write_half: Option<WriteHalf<TcpStream>>,
 }
 
 impl Actor for SocketWriter {
@@ -83,58 +83,51 @@ impl Actor for SocketWriter {
 }
 
 impl SocketWriter {
-    /// Creates a new SocketWriter using the write half of the socket
+    /// Creates a new SocketWriter using write half of the socket
     /// passed by parameter
-    pub fn new(write_half: WriteHalf<TcpStream>) -> Self {
-        Self { write_half: Arc::new(RwLock::new(write_half)) }
+    pub fn new(write_half: Option<WriteHalf<TcpStream>>) -> Self {
+        Self { write_half }
     }
 }
 
-//#[async_handler]
+#[async_handler]
 impl Handler<PaymentAccepted> for SocketWriter {
     type Result = ();
 
     /// Serializes and sends the message through the socket
-    fn handle(&mut self, msg: PaymentAccepted, _: &mut Self::Context) -> Self::Result {
-        //let mut write = self.write_half.take();
+    async fn handle(&mut self, msg: PaymentAccepted, _: &mut Context<Self>) -> Self::Result {
+        let mut write = self.write_half.take().expect("Writer already closed!");
         let json_message = serde_json::to_string(&MessageType::PaymentAccepted(msg))
             .expect("Error serializing PaymentAccepted message");
 
-        let write_half = self.write_half.clone();
+        let ret_write = async move {
+            write
+                .write_all(format!("{}\n", json_message).as_bytes()).await
+                .expect("should have sent");
+            write
+        }.await;
 
-        actix::spawn(async move {
-            let mut write_half = write_half.write().await;
-
-            // Write serialized msg in the socket
-            if let Err(e) = write_half.write_all(format!("{}\n", json_message).as_bytes()).await {
-                eprintln!("Error writing in socket: {:?}", e);
-            }
-            println!("Payment accepted sent {}", json_message);
-        });
-
+        self.write_half = Some(ret_write);
     }
 }
 
+#[async_handler]
 impl Handler<PaymentRejected> for SocketWriter {
     type Result = ();
 
-    /// Serializes and sends the message through the socket
-    fn handle(&mut self, msg: PaymentRejected, _: &mut Self::Context) {
+    async fn handle(&mut self, msg: PaymentRejected, _: &mut Context<Self>) -> Self::Result {
+        let mut write = self.write_half.take().expect("Writer already closed!");
         let json_message = serde_json::to_string(&MessageType::PaymentRejected(msg))
             .expect("Error serializing PaymentRejected message");
 
-        let write_half = self.write_half.clone();
+        let ret_write = async move {
+            write
+                .write_all(format!("{}\n", json_message).as_bytes()).await
+                .expect("should have sent");
+            write
+        }.await;
 
-        actix::spawn(async move {
-            let mut write_half = write_half.write().await;
-
-            // Writes serialized msg in the socket
-            if let Err(e) = write_half.write_all(format!("{}\n", json_message).as_bytes()).await {
-                eprintln!("Error writing in socket: {:?}", e);
-            }
-            println!("Payment rejected sent");
-        });
-
+        self.write_half = Some(ret_write);
     }
 }
 
@@ -155,17 +148,23 @@ impl Handler<SendPayment> for PaymentApp {
     type Result = ();
 
     /// Procesa el mensaje 'SendPayment' y envía al wirter si fue aceptado o no
-    fn handle(&mut self, msg: SendPayment, _: &mut Self::Context) {
+    fn handle(&mut self, msg: SendPayment, _: &mut Self::Context) -> Self::Result {
         if self.payment_is_accepted() {
             let payment_accepted = PaymentAccepted{id: msg.id, amount: msg.amount};
             log(&format!("PAYMENT ACCEPTED FOR RIDE {}", msg.id), "NEW_CONNECTION");
             self.rides_and_payments.insert(msg.id, msg.amount); //Lo agrego a los viajes aceptados
-            self.writer.do_send(payment_accepted);
+            match self.writer.try_send(payment_accepted) {
+                Ok(_) => (),
+                Err(_) => println!("Error sending message to SocketWriter")
+            }
         }
         else {
             let payment_rejected = PaymentRejected{id:msg.id};
             log(&format!("PAYMENT REJECTED FOR RIDE {}", msg.id), "DISCONNECTION");
-            self.writer.do_send(payment_rejected);
+            match self.writer.try_send(payment_rejected) {
+                Ok(_) => (),
+                Err(_) => println!("Error sending message to SocketWriter")
+            }
         }
     }
 }
