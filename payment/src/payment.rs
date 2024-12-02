@@ -1,4 +1,4 @@
-use actix::{Actor, Context, Handler, Addr};
+use actix::{Actor, Context, Handler, Addr, AsyncContext, WrapFuture};
 use std::collections::HashMap;
 use std::io::{self};
 use tokio::io::{WriteHalf, ReadHalf, AsyncWriteExt, BufReader, AsyncBufReadExt};
@@ -10,6 +10,7 @@ use tokio::sync::RwLock;
 use tokio_stream::wrappers::LinesStream;
 use rand::Rng;
 use colored::Colorize;
+use actix::ActorFutureExt;
 
 use crate::messages::*;
 
@@ -90,44 +91,67 @@ impl SocketWriter {
     }
 }
 
-#[async_handler]
 impl Handler<PaymentAccepted> for SocketWriter {
     type Result = ();
 
     /// Serializes and sends the message through the socket
-    async fn handle(&mut self, msg: PaymentAccepted, _: &mut Context<Self>) -> Self::Result {
-        let mut write = self.write_half.take().expect("Writer already closed!");
+    fn handle(&mut self, msg: PaymentAccepted, ctx: &mut Context<Self>) -> Self::Result {
+        let write_half = self.write_half.take().expect("Writer already closed!");
         let json_message = serde_json::to_string(&MessageType::PaymentAccepted(msg))
             .expect("Error serializing PaymentAccepted message");
 
-        let ret_write = async move {
-            write
-                .write_all(format!("{}\n", json_message).as_bytes()).await
-                .expect("should have sent");
-            write
-        }.await;
+        ctx.spawn(
+            async move {
+                let mut write = write_half;
 
-        self.write_half = Some(ret_write);
+                if let Err(e) = write
+                    .write_all(format!("{}\n", json_message).as_bytes())
+                    .await
+                {
+                    log::debug!("Error sending PaymentAccepted message: {}", e);
+                }
+
+                // Return the write_half after sending
+                write
+            }
+                .into_actor(self) // Convert the future into an actor's future
+                .map(|write_half, actor, _| {
+                    // Reinsert the write_half into the actor
+                    actor.write_half = Some(write_half);
+                }),
+        );
     }
 }
 
-#[async_handler]
 impl Handler<PaymentRejected> for SocketWriter {
     type Result = ();
 
-    async fn handle(&mut self, msg: PaymentRejected, _: &mut Context<Self>) -> Self::Result {
-        let mut write = self.write_half.take().expect("Writer already closed!");
+    fn handle(&mut self, msg: PaymentRejected, ctx: &mut Context<Self>) -> Self::Result {
+        let  write_half = self.write_half.take().expect("Writer already closed!");
         let json_message = serde_json::to_string(&MessageType::PaymentRejected(msg))
             .expect("Error serializing PaymentRejected message");
 
-        let ret_write = async move {
-            write
-                .write_all(format!("{}\n", json_message).as_bytes()).await
-                .expect("should have sent");
-            write
-        }.await;
+        ctx.spawn(
+            async move {
+                let mut write = write_half;
 
-        self.write_half = Some(ret_write);
+                if let Err(e) = write
+                    .write_all(format!("{}\n", json_message).as_bytes())
+                    .await
+                {
+                    log::debug!("Error sending PaymentAccepted message: {}", e);
+                }
+
+                // Return the write_half after sending
+                write
+            }
+                .into_actor(self) // Convert the future into an actor's future
+                .map(|write_half, actor, _| {
+                    // Reinsert the write_half into the actor
+                    actor.write_half = Some(write_half);
+                }),
+        );
+
     }
 }
 
