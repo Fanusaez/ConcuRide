@@ -19,7 +19,7 @@ impl Actor for Driver {
     /// Starts the ping system if the driver is the leader
     fn started(&mut self, ctx: &mut Self::Context) {
         if self.is_leader.load(Ordering::SeqCst) {
-            self.start_ping_system(ctx.address());
+            self.start_ping_system(ctx.address(), ctx);
         }
         else {
             self.check_leader_alive(ctx.address());
@@ -389,7 +389,7 @@ impl Handler<NewLeaderAttributes> for Driver {
     fn handle(&mut self, msg: NewLeaderAttributes, ctx: &mut Self::Context) -> Self::Result {
         if self.is_leader.load(Ordering::SeqCst) {
             log("NEW LEADER ATTRIBUTES RECEIVED", "NEW_CONNECTION");
-            self.handle_new_leader_attributes_as_leader(msg, ctx.address()).unwrap();
+            self.handle_new_leader_attributes_as_leader(msg, ctx.address(), ctx).unwrap();
         }
         else {
             eprintln!("Driver {} is not the leader, should not receive this message", self.id);

@@ -85,7 +85,7 @@ pub struct Driver {
     /// ID's and WriteHalf of passengers
     pub passengers_write_half: HashMap<u16, Option<WriteHalf<TcpStream>>>,
     /// Status of the drivers
-    pub drivers_status: Arc<RwLock<HashMap<u16, DriverStatus>>>,
+    pub drivers_status:HashMap<u16, DriverStatus>,
     /// UDP Socket for leader election
     pub socket: Arc<UdpSocket>,
     /// Driver's IDS
@@ -141,9 +141,6 @@ impl Driver {
                           &mut payment_read_half,
                           &mut drivers_status).await?;
 
-        // Arcs for shared data
-        let mut drivers_status_arc = Arc::new(RwLock::new(drivers_status));
-
         // para que funcione, no se porque
         let associate_driver_streams = Self::associate_drivers_stream;
         let associate_payment_stream = Self::associate_payment_stream;
@@ -174,7 +171,7 @@ impl Driver {
                 state: States::Idle,
                 drivers_last_position,
                 payment_write_half,
-                drivers_status: drivers_status_arc.clone(),
+                drivers_status,
                 ride_manager: RideManager::new(),
                 socket: Arc::new(socket),
                 drivers_id,
@@ -313,48 +310,29 @@ impl Driver {
     /// In a loop sends pings to the drivers
     /// # Arguments
     /// * `addr` - The address of the driver
-    pub fn start_ping_system(&self, addr: Addr<Driver>) {
-        let mut drivers_status = self.drivers_status.clone();
-        tokio::spawn(async move {
-            loop {
-                {
-                    let mut drivers = drivers_status.write().unwrap();
-                    for (driver_id, status) in drivers.iter_mut() {
-                        if status.is_alive {
-                            addr.do_send(SendPingTo { id_to_send: *driver_id });
+    pub fn start_ping_system(&mut self, addr: Addr<Driver>, ctx: &mut Context<Self>) {
+        // Usar `run_interval` para tareas periódicas dentro del contexto del actor
+        ctx.run_interval(Duration::from_secs(PING_INTERVAL), move |actor, _ctx| {
+            // Iterar sobre los conductores y actualizar estados
+            let driver_ids: Vec<u16> = actor.drivers_status.keys().cloned().collect();
 
-                            // si esta muerto, me automando un mesnaje
-                            if !update_driver_status(status, *driver_id) {
-                                addr.do_send(DeadDriver { driver_id: *driver_id });
-                            }
-                        }
-                    }
+            for driver_id in driver_ids {
+                addr.do_send(SendPingTo { id_to_send: driver_id });
+
+                // Actualizar el estado del conductor
+                if !actor.update_driver_status(driver_id) {
+                    addr.do_send(DeadDriver { driver_id });
                 }
-                tokio::time::sleep(Duration::from_secs(PING_INTERVAL)).await; // Enviar pings cada 5 segundos
             }
         });
     }
 
     /// Handles the ping message as a driver
     /// This is a response Ping from a driver (PONG)
-    pub fn handle_ping_as_leader(&self, msg: Ping) -> Result<(), io::Error> {
+    pub fn handle_ping_as_leader(&mut self, msg: Ping) -> Result<(), io::Error> {
         // id del driver que me envio el ping
         let driver_id = msg.id_sender;
-
-        // obtengo locks
-        let mut drivers_status = self.drivers_status.write().unwrap();
-
-        let driver_status = match drivers_status.get_mut(&driver_id) {
-            Some(status) => status,
-            None => {
-                debug!("Error: No se encontró el estado del driver con id {}", driver_id);
-                return Ok(());
-            }
-        };
-
-        // actualizo el tiempo del ultimo mensaje recibido
-        driver_status.last_response = Some(std::time::Instant::now());
-
+        self.drivers_status.get_mut(&driver_id).unwrap().last_response = Some(Instant::now());
         Ok(())
     }
 
@@ -835,11 +813,11 @@ impl Driver {
 
     }
 
-    pub fn handle_new_leader_attributes_as_leader(&mut self, msg: NewLeaderAttributes, addr: Addr<Driver>, ) -> Result<(), io::Error> {
+    pub fn handle_new_leader_attributes_as_leader(&mut self, msg: NewLeaderAttributes, addr: Addr<Driver>, ctx: &mut Context<Self>) -> Result<(), io::Error> {
         self.active_drivers = msg.active_drivers;
         self.drivers_last_position = msg.drivers_last_position;
         self.payment_write_half = msg.payment_write_half;
-        self.drivers_status = Arc::new(RwLock::new(msg.drivers_status));
+        self.drivers_status = msg.drivers_status;
 
         addr.do_send(StreamMessage{stream: msg.payment_read_half});
 
@@ -853,7 +831,7 @@ impl Driver {
         }
 
         // TODO: esto no deberia estar aca, deberia hacerse en una funcion/mensaje aparte
-        self.start_ping_system(addr);
+        self.start_ping_system(addr, ctx);
 
         Ok(())
     }
@@ -1077,6 +1055,35 @@ impl Driver {
         closest_driver
     }
 
+    /// Check if the driver is alive, if the driver does not respond in 5 seconds, it is considered dead
+    /// If dead, remove the driver from the active drivers and add it to the dead drivers
+    /// # Arguments
+    /// * `status` - The status of the driver
+    /// * `active_drivers` - The active drivers
+    /// * `dead_drivers` - The dead drivers
+    /// * `driver_id` - The id of the driver
+    /// # Returns
+    /// True if the driver is alive, false otherwise
+    /// TODO: sacar el driver de drivers_status?
+    pub fn update_driver_status(&mut self, driver_id: u16) -> bool {
+        // Obtener el tiempo actual
+        let time_now = Instant::now();
+        let mut is_alive = true;
+
+        // Actualizar el estado del conductor correspondiente
+        if let Some(status) = self.drivers_status.get_mut(&driver_id) {
+            if let Some(last_response) = status.last_response {
+                // Considerar al conductor muerto si no responde en más de PING_INTERVAL
+                if time_now.duration_since(last_response).as_secs() > PING_INTERVAL {
+                    status.is_alive = false;
+                    is_alive = false;
+                }
+            }
+        }
+
+        is_alive
+    }
+
 
 /// ---------------------------------------------------------- LEADER ELECTION IMPLEMENTATION ---------------------------------------------------- ///
 
@@ -1297,29 +1304,4 @@ impl Driver {
             //println!("[{}] ACK recibido de {}", current_id, next_id);
         }
     }
-}
-
-/// Check if the driver is alive, if the driver does not respond in 5 seconds, it is considered dead
-/// If dead, remove the driver from the active drivers and add it to the dead drivers
-/// # Arguments
-/// * `status` - The status of the driver
-/// * `active_drivers` - The active drivers
-/// * `dead_drivers` - The dead drivers
-/// * `driver_id` - The id of the driver
-/// # Returns
-/// True if the driver is alive, false otherwise
-/// TODO: sacar el driver de drivers_status?
-pub fn update_driver_status(status: &mut DriverStatus,
-                            driver_id: u16) -> bool {
-    // tomo el tiempo actual
-    let time_now = Instant::now();
-    let mut is_alive = true;
-    if let Some(last_response) = status.last_response {
-        // considero muerto si no responde en 5 segundos
-        if time_now.duration_since(last_response).as_secs() > PING_INTERVAL {
-            status.is_alive = false;
-            is_alive = false;
-        }
-    }
-    is_alive
 }
