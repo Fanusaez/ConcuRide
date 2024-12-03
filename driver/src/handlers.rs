@@ -91,11 +91,6 @@ impl Handler<RideRequest> for Driver {
     /// Handles the ride request message depending on whether the driver is the leader or not.
     fn handle(&mut self, msg: RideRequest, ctx: &mut Self::Context) -> Self::Result {
         if self.is_leader.load(Ordering::SeqCst) {
-            // todo: ojo, si el pasajero se reconcto no deberia imprimirse esto, en handle_ride_request_as_leader se maneja y hay otro TODO
-            log(
-                &format!("LEADER RECEIVED RIDE REQUEST FROM PASSENGER {}", msg.id),
-                "DRIVER",
-            );
             self.handle_ride_request_as_leader(msg, ctx)
                 .expect("Error handling ride request as leader");
         } else {

@@ -455,6 +455,11 @@ impl Driver {
             return Ok(());
         }
 
+        log(
+            &format!("LEADER RECEIVED RIDE REQUEST FROM PASSENGER {}", msg.id),
+            "DRIVER",
+        );
+
         // Insert the ride request in the unpaid rides
         self.ride_manager
             .insert_unpaid_ride(msg)
