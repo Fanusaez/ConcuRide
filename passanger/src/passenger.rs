@@ -316,6 +316,8 @@ impl Handler<RideRequest> for TcpSender {
     }
 }
 
+/// Handles `NewConnection` message coming from Passenger and sends it to the
+/// leader driver through the socket
 #[async_handler]
 impl Handler<NewConnection> for TcpSender {
     type Result = ();
