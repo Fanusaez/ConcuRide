@@ -141,6 +141,12 @@ pub struct PassengerNewLeader {
     pub leader_id: u16,
 }
 
+#[derive(Serialize, Deserialize, Message, Debug, Clone)]
+#[rtype(result = "()")]
+pub struct ReStartRideRequest {
+    pub ride_request: RideRequest,
+}
+
 #[derive(Message, Debug)]
 #[rtype(result = "()")]
 pub struct NewLeaderAttributes {
@@ -211,4 +217,5 @@ pub enum MessageType {
     DeadDriver(DeadDriver),
     DeadLeader(DeadLeader),
     PassengerNewLeader(PassengerNewLeader),
+    ReStartRideRequest(ReStartRideRequest),
 }

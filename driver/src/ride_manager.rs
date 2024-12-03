@@ -16,6 +16,8 @@ pub struct RideManager {
     /// Already paid rides (ride_id, PaymentAccepted). It is used to send payment to the driver
     /// from the leader
     paid_rides: HashMap<u16, PaymentAccepted>,
+
+    driver_and_passenger: HashMap<u16, u16>,
 }
 
 impl RideManager {
@@ -26,6 +28,10 @@ impl RideManager {
         // Lo pongo el pending_rides hasta que alguien acepte el viaje
         self.pending_rides.insert(msg.id, msg);
         Ok(())
+    }
+
+    pub fn get_pending_ride_requests(&self, passenger_id: u16) -> RideRequest {
+        self.pending_rides[&passenger_id]
     }
 
     /// Removes ride from pending rides
@@ -153,6 +159,7 @@ impl RideManager {
             unpaid_rides: HashMap::new(),
             ride_and_offers: HashMap::new(),
             paid_rides: HashMap::new(),
+            driver_and_passenger: HashMap::new(),
         }
     }
 
@@ -178,51 +185,40 @@ impl RideManager {
         }
     }
 
-    /// Saves in a file the state of the rides so if the leader disconnects
-    /// the new leader can access to the information
-    /// # Arguments
-    /// * `pending_rides` - already paid rides, waiting to be accepted by a driver
-    /// * `unpaid_rides` - waiting for payment confirmation
-    /// * `ride_and_offers` - Passenger last DriveRequest and the drivers who have been offered the ride
-    /// * `paid_rides` - Already paid rides (ride_id, PaymentAccepted). It is used to send payment to the driver from the leader
-    /// * `path` - path to the file that will save the information
-    pub fn create_backup(&self, path: &str) -> Result<(), io::Error> {
-        // Serialize data to JSON
-        let json_data = serde_json::to_string_pretty(self)
-            .expect("Error serializing backup data to JSON");
-
-        // Save JSON in the file
-        let mut file = fs::File::create(path)?; // Deletes file if it already exists
-        file.write_all(json_data.as_bytes())?;
+    /// Inserts the driver_id and passenger_id in the driver_and_passenger hashmap
+    pub fn insert_driver_and_passenger(&mut self, driver_id: u16, passenger_id: u16) -> Result<(), io::Error> {
+        self.driver_and_passenger.insert(driver_id, passenger_id);
         Ok(())
     }
 
-    /// Loads data from JSON file and returns it in a struct
-    /// TODO: Manejar errores si el archivo no existe y acoplar al ride manager
-    /// en vez de devolverlo
-    pub fn load_backup(&self, path: &str) -> Result<RideManager, io::Error> {
-        // Read file content
-        match fs::read_to_string(path) {
-            Ok(json_data) => {
-                // Deserialize JSON to RideManager structure
-                match serde_json::from_str::<RideManager>(&json_data) {
-                    Ok(backup_data) => {
-                        println!("Backup: {:?}", backup_data);
-                        Ok(backup_data)
-                    },
-                    Err(e) => Err(io::Error::new(
-                        ErrorKind::InvalidData,
-                        format!("Error deserializing backup data: {}", e),
-                    )),
-                }
-            }
-            Err(e) => {
-                println!("Backup non existing file: {}", e);
-                Err(e)
-            }
+    /// Removes the driver_id from the driver_and_passenger hashmap
+    pub fn remove_driver_and_passenger(&mut self, driver_id: u16) -> Result<(), io::Error> {
+        match self.driver_and_passenger.remove(&driver_id) {
+            Some(_) => Ok(()),
+            None => {
+                debug!("Driver with id {} not found in driver_and_passenger", driver_id);
+                Ok(())
+            },
         }
     }
+
+    pub fn get_driver_and_passenger(&mut self, driver_id: u16) -> Result<(u16, u16), io::Error> {
+        match self.driver_and_passenger.get(&driver_id) {
+            Some(&passenger_id) => Ok((driver_id, passenger_id)),
+            None => Err(io::Error::new(
+                ErrorKind::NotFound,
+                format!("Driver with id {} not found in driver_and_passenger", driver_id),
+            )),
+        }
+    }
+
+    pub fn is_driver_assigned_to_passenger(&self, driver_id: u16) -> bool {
+        self.driver_and_passenger.contains_key(&driver_id)
+    }
+
 }
+
+
 
 #[cfg(test)]
 mod tests {

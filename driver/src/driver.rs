@@ -430,6 +430,11 @@ impl Driver {
         Ok(())
     }
 
+    pub fn handle_restart_ride_request_as_driver(&mut self, msg: ReStartRideRequest, ctx: &mut Context<Self>) -> Result<(), io::Error> {
+        self.drive_and_finish(msg.ride_request, ctx.address())?;
+        Ok(())
+    }
+
     /// Handles the payment accepted message from the payment app
     /// Sends the ride request to the closest driver and adds the driver to the offers
     /// # Arguments
@@ -523,6 +528,8 @@ impl Driver {
                 msg.passenger_id, e
             );
         }
+        self.ride_manager.insert_driver_and_passenger(msg.driver_id, msg.passenger_id)?;
+
         Ok(())
     }
 
@@ -564,6 +571,7 @@ impl Driver {
         // Remove the ride from the pending rides
         // todo: ver manejo de errores, la funcion esta la hardcodee para que no devuelva un error
         self.ride_manager.remove_ride_from_pending(msg.passenger_id)?;
+        self.ride_manager.remove_driver_and_passenger(msg.driver_id)?;
 
         let msg_message_type = MessageType::FinishRide(msg);
 
@@ -691,6 +699,12 @@ impl Driver {
         self.dead_drivers.retain(|&x| x != msg.driver_id);
         self.drivers_last_position.insert(msg.driver_id, (0, 0));
         self.drivers_status.insert(msg.driver_id, DriverStatus { last_response: Some(Instant::now()), is_alive: true });
+
+        if self.ride_manager.is_driver_assigned_to_passenger(msg.driver_id) {
+            let passenger_id = self.ride_manager.get_driver_and_passenger(msg.driver_id).unwrap().1;
+            let ride_request = self.ride_manager.get_pending_ride_request(passenger_id).unwrap();
+            self.send_message_to_driver(msg.driver_id, MessageType::RideRequest(ride_request), ctx).unwrap()
+        }
 
     }
 

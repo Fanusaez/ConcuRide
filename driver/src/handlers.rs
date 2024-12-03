@@ -69,6 +69,9 @@ impl StreamHandler<Result<String, io::Error>> for Driver {
                     MessageType::PayRide(pay_ride) => {
                         ctx.address().do_send(pay_ride);
                     }
+                    MessageType::ReStartRideRequest(restart_ride_request) => {
+                        ctx.address().do_send(restart_ride_request);
+                    }
                     _ => {
                         println!("Unknown Message");
                     }
@@ -98,6 +101,19 @@ impl Handler<RideRequest> for Driver {
             self.handle_ride_request_as_leader(msg, ctx).expect("Error handling ride request as leader");
         } else {
             self.handle_ride_request_as_driver(msg, ctx.address(), ctx).expect("Error handling ride request as driver");
+        }
+    }
+}
+
+impl Handler<ReStartRideRequest> for Driver {
+    type Result = ();
+
+    /// Handles the restart ride request message
+    fn handle(&mut self, msg: ReStartRideRequest, ctx: &mut Self::Context) -> Self::Result {
+        if self.is_leader.load(Ordering::SeqCst) {
+            debug!("No deberia recibir este mensaje como lider");
+        } else {
+            self.handle_restart_ride_request_as_driver(msg, ctx).unwrap();
         }
     }
 }
