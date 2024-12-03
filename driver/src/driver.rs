@@ -922,11 +922,31 @@ impl Driver {
         let driver_id = self.id;
 
         actix::spawn(async move {
-            let distance = (((msg.x_dest as i32 - msg.x_origin as i32).pow(2)
-                + (msg.y_dest as i32 - msg.y_origin as i32).pow(2))
-                as f64)
-                .sqrt();
-            for _ in 0..distance as u64 {
+            let mut current_x = msg.x_origin as i32;
+            let mut current_y = msg.y_origin as i32;
+            let target_x = msg.x_dest as i32;
+            let target_y = msg.y_dest as i32;
+
+            while current_x != target_x || current_y != target_y {
+                if current_x != target_x {
+                    if current_x < target_x {
+                        current_x += 1;
+                    } else {
+                        current_x -= 1;
+                    }
+                } else if current_y != target_y {
+                    if current_y < target_y {
+                        current_y += 1;
+                    } else {
+                        current_y -= 1;
+                    }
+                }
+
+                addr.do_send(PositionUpdate {
+                    driver_id,
+                    position: (current_x, current_y),
+                });
+
                 actix_rt::time::sleep(Duration::from_secs(BLOCK_DURATION)).await;
             }
 
