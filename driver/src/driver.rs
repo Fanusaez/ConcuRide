@@ -1544,7 +1544,7 @@ impl Driver {
         });
 
         let mut buf = [0u8; 1024];
-        loop {
+        while !*_stop.0.lock().unwrap() {
             let (len, addr) = match socket.recv_from(&mut buf) {
                 Ok(result) => result,
                 Err(e) => {
@@ -1663,6 +1663,13 @@ impl Driver {
                 }
             }
         }
+        // Vaciar el socket UDP en caso de que haya quedado algún mensaje
+        socket.set_read_timeout(Some(Duration::from_secs(5))).expect("TODO: panic message");
+        while let Ok((len, _)) = socket.recv_from(&mut buf) {
+            debug!("Mensaje descartado de {} bytes", len);
+        }
+        // Restaurar el timeout a None
+        socket.set_read_timeout(None).expect("TODO: panic message");
     }
 
     pub fn safe_send_next(
