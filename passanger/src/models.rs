@@ -1,3 +1,5 @@
+//! Contains messages used by Passenger or TcpSender
+
 use actix::Message;
 use serde::{Deserialize, Serialize};
 use tokio::io::{ReadHalf, WriteHalf};

@@ -1,3 +1,5 @@
+//! Contains Passenger and TcpSender structs
+
 use crate::models::*;
 use crate::{utils, LEADER_PORT};
 use actix::{Actor, ActorContext, Addr, AsyncContext, Context, Handler, StreamHandler};

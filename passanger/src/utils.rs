@@ -1,3 +1,5 @@
+//! Auxiliary functions
+
 use crate::models::*;
 use colored::Colorize;
 use std::collections::HashMap;
@@ -10,6 +12,7 @@ pub fn get_rides(file_path: &str) -> Result<HashMap<u16, RideRequest>, io::Error
     Ok(rides)
 }
 
+/// Logger to show readable messages
 pub fn log(message: &str, type_msg: &str) {
     match type_msg {
         "DRIVER" => println!("[{}] - {}", type_msg, message.blue().bold()),
