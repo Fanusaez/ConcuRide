@@ -128,6 +128,12 @@ pub struct DeadLeader {
     pub leader_id: u16,
 }
 
+#[derive(Serialize, Deserialize, Message, Debug, Clone, Copy)]
+#[rtype(result = "()")]
+pub struct DeadLeaderReconnection {
+    pub leader_id: u16,
+}
+
 #[derive(Serialize, Deserialize, Message, Debug, Clone)]
 #[rtype(result = "()")]
 pub struct NewLeader {

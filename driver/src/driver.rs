@@ -1053,6 +1053,7 @@ impl Driver {
         msg: NewLeader,
         addr: Addr<Driver>,
     ) -> Result<(), io::Error> {
+        let old_leader = self.leader_port;
         // Change myself to leader
         self.is_leader.store(true, Ordering::SeqCst);
         // Change the state to idle
@@ -1067,8 +1068,10 @@ impl Driver {
         self.connect_to_passengers_as_new_leader(addr.clone())?;
 
         let drivers_id = self.drivers_id.clone();
+        let addr_clone = addr.clone();
         tokio::spawn(async move {
             Self::initialize_new_leader(drivers_id, addr).await;
+            addr_clone.do_send( DeadLeaderReconnection{leader_id: old_leader});
         });
         Ok(())
     }

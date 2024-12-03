@@ -446,7 +446,7 @@ impl Handler<DeadDriver> for Driver {
 impl Handler<DeadLeader> for Driver {
     type Result = ();
 
-    fn handle(&mut self, _msg: DeadLeader, ctx: &mut Self::Context) -> Self::Result {
+    fn handle(&mut self, msg: DeadLeader, ctx: &mut Self::Context) -> Self::Result {
         if self.is_leader.load(Ordering::SeqCst) {
             eprintln!("Leader should not receive DeadLeader message");
         } else {
@@ -516,6 +516,21 @@ impl Handler<DriverReconnection> for Driver {
     fn handle(&mut self, msg: DriverReconnection, ctx: &mut Self::Context) -> Self::Result {
         if self.is_leader.load(Ordering::SeqCst) {
             self.handle_driver_reconnection_as_leader(msg, ctx);
+        } else {
+            eprintln!(
+                "Driver {} is not the leader, should not receive this message",
+                self.id
+            );
+        }
+    }
+}
+
+impl Handler<DeadLeaderReconnection> for Driver {
+    type Result = ();
+
+    fn handle(&mut self, msg: DeadLeaderReconnection, ctx: &mut Self::Context) -> Self::Result {
+        if self.is_leader.load(Ordering::SeqCst) {
+            self.reestablish_connection_with_driver(msg.leader_id, ctx);
         } else {
             eprintln!(
                 "Driver {} is not the leader, should not receive this message",
