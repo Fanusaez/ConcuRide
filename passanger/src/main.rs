@@ -2,12 +2,12 @@
 use crate::models::*;
 use crate::passenger::Passenger;
 
+/// Models module
+mod models;
 /// Passenger module
 mod passenger;
 /// Utils module
 mod utils;
-/// Models module
-mod models;
 
 /// Initial Leader Port
 pub const LEADER_PORT: u16 = 6000;

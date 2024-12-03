@@ -1,14 +1,13 @@
+use crate::models::*;
+use crate::{utils, LEADER_PORT};
+use actix::{Actor, ActorContext, Addr, AsyncContext, Context, Handler, StreamHandler};
+use actix_async_handler::async_handler;
+use log::debug;
 use std::cmp::PartialEq;
 use std::io;
-use actix::{Actor, Context, StreamHandler, Handler, Addr, AsyncContext, ActorContext};
-use actix_async_handler::async_handler;
 use tokio::io::{split, AsyncBufReadExt, AsyncWriteExt, BufReader, WriteHalf};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_stream::wrappers::LinesStream;
-use log::debug;
-use crate::{utils, LEADER_PORT};
-use crate::models::*;
-
 
 pub enum Sates {
     /// Before requesting a ride or after drop off
@@ -22,9 +21,12 @@ pub enum Sates {
 /// Implement PartialEq for the Sates enum
 impl PartialEq for Sates {
     fn eq(&self, other: &Self) -> bool {
-        matches!((self, other), (Sates::Idle, Sates::Idle) |
-            (Sates::WaitingDriver, Sates::WaitingDriver) |
-            (Sates::Traveling, Sates::Traveling))
+        matches!(
+            (self, other),
+            (Sates::Idle, Sates::Idle)
+                | (Sates::WaitingDriver, Sates::WaitingDriver)
+                | (Sates::Traveling, Sates::Traveling)
+        )
     }
 }
 
@@ -49,15 +51,14 @@ impl Actor for Passenger {
     fn stopping(&mut self, _: &mut Self::Context) -> actix::Running {
         actix::Running::Continue
     }
-
 }
 
 /// Handles incoming messages from the leader
 impl StreamHandler<Result<String, io::Error>> for Passenger {
-
     fn handle(&mut self, read: Result<String, io::Error>, ctx: &mut Self::Context) {
         if let Ok(line) = read {
-            let message: MessageType = serde_json::from_str(&line).expect("Failed to deserialize message");
+            let message: MessageType =
+                serde_json::from_str(&line).expect("Failed to deserialize message");
             match message {
                 MessageType::FinishRide(finish_ride) => {
                     ctx.address().do_send(finish_ride);
@@ -86,7 +87,10 @@ impl Handler<RideRequest> for Passenger {
 
     fn handle(&mut self, msg: RideRequest, _ctx: &mut Self::Context) -> Self::Result {
         if self.state == Sates::Idle {
-            utils::log(&format!("PASSENGER WITH ID {} REQUESTED A RIDE", self.id), "INFO");
+            utils::log(
+                &format!("PASSENGER WITH ID {} REQUESTED A RIDE", self.id),
+                "INFO",
+            );
             self.state = Sates::WaitingDriver;
             match self.tcp_sender.try_send(msg) {
                 Ok(_) => (),
@@ -104,7 +108,13 @@ impl Handler<FinishRide> for Passenger {
     type Result = ();
 
     fn handle(&mut self, msg: FinishRide, ctx: &mut Self::Context) -> Self::Result {
-        utils::log(&format!("PASSENGER WITH ID {} FINISHED RIDE WITH DRIVER {}", msg.passenger_id, msg.driver_id), "INFO");
+        utils::log(
+            &format!(
+                "PASSENGER WITH ID {} FINISHED RIDE WITH DRIVER {}",
+                msg.passenger_id, msg.driver_id
+            ),
+            "INFO",
+        );
         self.state = Sates::Idle;
         let addr = ctx.address();
         if let Some(ride) = self.rides.pop() {
@@ -121,7 +131,10 @@ impl Handler<DeclineRide> for Passenger {
     type Result = ();
 
     fn handle(&mut self, msg: DeclineRide, _ctx: &mut Self::Context) -> Self::Result {
-        println!("Passenger with id {} got declined message from Leader {}", msg.passenger_id, msg.driver_id);
+        println!(
+            "Passenger with id {} got declined message from Leader {}",
+            msg.passenger_id, msg.driver_id
+        );
         self.state = Sates::Idle;
     }
 }
@@ -131,7 +144,10 @@ impl Handler<PaymentRejected> for Passenger {
     type Result = ();
 
     fn handle(&mut self, _msg: PaymentRejected, _ctx: &mut Self::Context) -> Self::Result {
-        utils::log(&format!("PASSENGER WITH ID {} PAYMENT WAS REJECTED", self.id), "INFO");
+        utils::log(
+            &format!("PASSENGER WITH ID {} PAYMENT WAS REJECTED", self.id),
+            "INFO",
+        );
         self.state = Sates::Idle;
     }
 }
@@ -213,7 +229,6 @@ impl Passenger {
 
         addr.send(msg).await.unwrap();
 
-
         // Send the rides to myself to be processed
         for ride in rides_clone {
             addr.send(ride).await.unwrap();
@@ -223,15 +238,16 @@ impl Passenger {
         let listener = TcpListener::bind(format!("127.0.0.1:{}", port_id)).await?;
 
         // loop to accept all incoming connections, only used when new leader is appointed
-        while let Ok((stream,  _)) = listener.accept().await {
+        while let Ok((stream, _)) = listener.accept().await {
             let (read, write) = split(stream);
 
             // add the new stream to the actor
             addr.send(NewLeaderStreams {
                 read: Some(read),
                 write_half: Some(write),
-            }).await.unwrap();
-
+            })
+            .await
+            .unwrap();
         }
 
         Ok(())
@@ -271,7 +287,6 @@ impl Passenger {
     }
 }
 
-
 /// Contains an Option of the write half of a tcp stream
 pub struct TcpSender {
     /// The write half of the TcpStream
@@ -300,17 +315,20 @@ impl Handler<RideRequest> for TcpSender {
     type Result = ();
 
     async fn handle(&mut self, msg: RideRequest, _ctx: &mut Self::Context) -> Self::Result {
-        let mut write = self.write.take()
-            .expect("No debería poder llegar otro mensaje antes de que vuelva por usar AtomicResponse");
+        let mut write = self.write.take().expect(
+            "Should not be able to get another message before return because of AtomicResponse.",
+        );
 
         let msg_type = MessageType::RideRequest(msg);
         let serialized = serde_json::to_string(&msg_type).expect("should serialize");
         let ret_write = async move {
             write
-                .write_all(format!("{}\n", serialized).as_bytes()).await
+                .write_all(format!("{}\n", serialized).as_bytes())
+                .await
                 .expect("should have sent");
             write
-        }.await;
+        }
+        .await;
 
         self.write = Some(ret_write);
     }
@@ -323,17 +341,20 @@ impl Handler<NewConnection> for TcpSender {
     type Result = ();
 
     async fn handle(&mut self, msg: NewConnection, _ctx: &mut Self::Context) -> Self::Result {
-        let mut write = self.write.take()
-            .expect("No debería poder llegar otro mensaje antes de que vuelva por usar AtomicResponse");
+        let mut write = self.write.take().expect(
+            "Should not be able to get another message before return because of AtomicResponse.",
+        );
 
         let msg_type = MessageType::NewConnection(msg);
         let serialized = serde_json::to_string(&msg_type).expect("should serialize");
         let ret_write = async move {
             write
-                .write_all(format!("{}\n", serialized).as_bytes()).await
+                .write_all(format!("{}\n", serialized).as_bytes())
+                .await
                 .expect("should have sent");
             write
-        }.await;
+        }
+        .await;
 
         self.write = Some(ret_write);
     }
