@@ -1,6 +1,6 @@
 [![Review Assignment Due Date](https://classroom.github.com/assets/deadline-readme-button-22041afd0340ce965d47ae6ef1cefeee28c7c493a6346c4f15d667ab976d596c.svg)](https://classroom.github.com/a/GAOi0Fq-)
 
-# TP2
+# TP2: Primera entrega de diseño
 
 ## Aplicaciones
 
@@ -227,4 +227,48 @@ Para la conexión entre pasajeros, conductores y app de pagos utilizaremos socke
 - La aplicación de pagos no se cae
 - En caso que se rechace el pago, el viaje no se realiza
 - Una vez que se empieza el viaje no se puede cancelar y termina si o si.
+
+
+# TP 2: Entrega Final
+
+## Esquema
+
+El esquema de aplicaciones se mantiene igual al de la entrega inicial.
+
+![Esquema](./diagramas/concu_1-Página-3.jpg)
+
+## Algoritmo de decisión
+
+Utilizamos el algoritmo del anillo para manejar la elección del nuevo
+conductor líder cuando el actual se cae.
+
+En el caso del diagrama podemos observar el flujo de elección cuando
+se cae el primer conductor líder y se elige el próximo conductor
+con id más alto.
+
+![Diseño](./diagramas/concu_1-Página-5.jpg)
+
+## Mensajes
+
+Modificamos algunos mensajes respecto a la primera entrega y agregamos algunos nuevos.
+
+| **Message**             | **Sender**      | **Receiver**       | **Description**                                                                          |
+|--------------------------|-----------------|--------------------|------------------------------------------------------------------------------------------|
+| RideRequest             | Passenger       | LeaderDriver       | Sends coordinates and payment of new ride                                               |
+| SendPayment             | LeaderDriver    | PaymentApp         | Sends the trip payment to the payment ride                                              |
+| PaymentRejected         | PaymentApp      | LeaderDriver       | Informs that the payment was rejected                                                   |
+| PaymentAccepted         | PaymentApp      | LeaderDriver       | Informs that the payment was accepted                                                   |
+| RideRequest             | LeaderDriver    | Driver             | Sends coordinates to near starting point drivers                                        |
+| PositionUpdate          | Driver          | LeaderDriver       | Informs current location of the driver                                                  |
+| DeclineRide             | Driver          | LeaderDriver       | Rejects ride offer                                                                      |
+| AcceptRide              | Driver          | LeaderDriver       | Accepts ride offer                                                                      |
+| FinishRide              | Driver          | LeaderDriver       | Informs that the ride has finished to the leader driver                                 |
+| FinishRide              | LeaderDriver    | Passenger          | Informs that the ride has finished to the passenger and removes it from pending_rides   |
+| PayRide                 | LeaderDriver    | Driver             | Sends ride’s payment to the driver                                                     |
+| Ping                    | LeaderDriver    | Driver             | Updates the last ping response from leader and replies with a pong                      |
+| Ping                    | Driver          | LeaderDriver       | Updates the last ping response from driver                                              |
+| NewLeader               | Driver          | Driver             | Informs the new leader of its role and the rest of the drivers that the new leader has been appointed |
+| NewLeaderAttributes     | Driver          | Driver             | Updates the new leader driver with leader attributes                                    |
+| RestartDriverSearch     | Driver          | LeaderDriver       | Restarts the search of a driver for the passenger                                       |
+| DriverReconnection      | LeaderDriver    | LeaderDriver       | Reestablishes the connection between leader and fallen drivers                          |
 
