@@ -446,7 +446,7 @@ impl Handler<DeadDriver> for Driver {
 impl Handler<DeadLeader> for Driver {
     type Result = ();
 
-    fn handle(&mut self, msg: DeadLeader, ctx: &mut Self::Context) -> Self::Result {
+    fn handle(&mut self, _msg: DeadLeader, ctx: &mut Self::Context) -> Self::Result {
         if self.is_leader.load(Ordering::SeqCst) {
             eprintln!("Leader should not receive DeadLeader message");
         } else {

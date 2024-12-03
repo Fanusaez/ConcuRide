@@ -70,9 +70,9 @@ impl RideManager {
             Some(_) => Ok(()), // Se encontró y eliminó
             None => {
                 debug!(
-                "RideRequest with id {} not found in ride_and_offers",
-                passenger_id
-            );
+                    "RideRequest with id {} not found in ride_and_offers",
+                    passenger_id
+                );
                 Ok(())
             }
         }

@@ -53,7 +53,7 @@ const PING_TIMEOUT: u64 = 7;
 const TIMEOUT: Duration = Duration::from_secs(5);
 const CHECK_LEADER_TIME: u64 = 5;
 const PORT_FOR_UDP: u16 = 4000;
-const BLOCK_DURATION : u64 = 2;
+const BLOCK_DURATION: u64 = 2;
 
 pub type FullStream = (Option<ReadHalf<TcpStream>>, Option<WriteHalf<TcpStream>>);
 
@@ -406,7 +406,6 @@ impl Driver {
 
                 let now = Instant::now();
                 let elapsed = now.duration_since(last_ping).as_secs();
-                println!("{:?}",elapsed);
                 if elapsed > PING_TIMEOUT {
                     addr.do_send(DeadLeader { leader_id });
                     break;
@@ -918,7 +917,10 @@ impl Driver {
         let driver_id = self.id;
 
         actix::spawn(async move {
-            let distance = (((msg.x_dest as i32 - msg.x_origin as i32).pow(2) + (msg.y_dest as i32 - msg.y_origin as i32).pow(2)) as f64).sqrt();
+            let distance = (((msg.x_dest as i32 - msg.x_origin as i32).pow(2)
+                + (msg.y_dest as i32 - msg.y_origin as i32).pow(2))
+                as f64)
+                .sqrt();
             for _ in 0..distance as u64 {
                 actix_rt::time::sleep(Duration::from_secs(BLOCK_DURATION)).await;
             }
@@ -1057,7 +1059,9 @@ impl Driver {
         let addr_clone = addr.clone();
         tokio::spawn(async move {
             Self::initialize_new_leader(drivers_id, addr).await;
-            addr_clone.do_send( DeadLeaderReconnection{leader_id: old_leader});
+            addr_clone.do_send(DeadLeaderReconnection {
+                leader_id: old_leader,
+            });
         });
         Ok(())
     }
@@ -1650,7 +1654,9 @@ impl Driver {
             }
         }
         // Vaciar el socket UDP en caso de que haya quedado algún mensaje
-        socket.set_read_timeout(Some(Duration::from_secs(5))).expect("TODO: panic message");
+        socket
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .expect("TODO: panic message");
         while let Ok((len, _)) = socket.recv_from(&mut buf) {
             debug!("Mensaje descartado de {} bytes", len);
         }
