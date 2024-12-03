@@ -87,9 +87,6 @@ impl StreamHandler<Result<String, io::Error>> for Driver {
 
 }
 
-/// TODO: GENERAL DE TODOS LOS HANDLERS, DEBERIAMOS PASAR TODA LA FUNCIONALIDAD A DRIVER, SOLO LOS PRINTS DEJARLOS CAPAZ
-
-
 impl Handler<RideRequest> for Driver {
     type Result = ();
 
@@ -420,6 +417,7 @@ impl Handler<NewPassengerHalfWrite> for Driver {
 
 }
 
+/// Handles the driver reconnection message, only used by the leader
 impl Handler<DriverReconnection> for Driver {
     type Result = ();
 
