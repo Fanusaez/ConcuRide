@@ -1520,7 +1520,7 @@ impl Driver {
     fn receive(
         id: u16,
         socket: Arc<UdpSocket>,
-        stop: Arc<(Mutex<bool>, Condvar)>,
+        _stop: Arc<(Mutex<bool>, Condvar)>,
         got_ack: Arc<(Mutex<Option<u16>>, Condvar)>,
         leader_id_cond: Arc<(Mutex<Option<u16>>, Condvar)>,
         drivers_id: Vec<u16>,
