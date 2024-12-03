@@ -529,7 +529,7 @@ impl Handler<DeadLeaderReconnection> for Driver {
     type Result = ();
 
     fn handle(&mut self, msg: DeadLeaderReconnection, ctx: &mut Self::Context) -> Self::Result {
-        if self.is_leader.load(Ordering::SeqCst) {
+        if self.is_leader.load(Ordering::SeqCst) || msg.leader_id != 6000 {
             self.reestablish_connection_with_driver(msg.leader_id, ctx);
         } else {
             eprintln!(

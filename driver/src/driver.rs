@@ -53,6 +53,7 @@ const PING_TIMEOUT: u64 = 7;
 const TIMEOUT: Duration = Duration::from_secs(5);
 const CHECK_LEADER_TIME: u64 = 5;
 const PORT_FOR_UDP: u16 = 4000;
+const BLOCK_DURATION : u64 = 2;
 
 pub type FullStream = (Option<ReadHalf<TcpStream>>, Option<WriteHalf<TcpStream>>);
 
@@ -405,7 +406,7 @@ impl Driver {
 
                 let now = Instant::now();
                 let elapsed = now.duration_since(last_ping).as_secs();
-
+                println!("{:?}",elapsed);
                 if elapsed > PING_TIMEOUT {
                     addr.do_send(DeadLeader { leader_id });
                     break;
@@ -753,7 +754,7 @@ impl Driver {
         // Remove the driver from the drivers last position
         self.drivers_last_position.remove(&dead_driver_id);
         // Remove the driver from the drivers status
-        self.drivers_status.remove(&dead_driver_id);
+        //self.drivers_status.remove(&dead_driver_id);
 
         // Cover case where the driver was offered a ride and did not respond
         for (passenger_id, drivers_id) in self.ride_manager.ride_and_offers.iter_mut() {
@@ -915,26 +916,11 @@ impl Driver {
     /// * `addr` - The address of the driver
     fn drive_and_finish(&mut self, msg: RideRequest, addr: Addr<Self>) -> Result<(), io::Error> {
         let driver_id = self.id;
-        let duration = calculate_travel_duration(&msg);
 
         actix::spawn(async move {
-            let mut current_position = (msg.x_origin, msg.y_origin);
-            let advancement = 10; // Dividir el viaje en 10 pasos
-            let x_km = (msg.x_dest as i32 - msg.x_origin as i32) as f64 / advancement as f64;
-            let y_km = (msg.y_dest as i32 - msg.y_origin as i32) as f64 / advancement as f64;
-
-            for i in 0..=advancement {
-                current_position.0 = (msg.x_origin as f64 + x_km * i as f64) as u16;
-                current_position.1 = (msg.y_origin as f64 + y_km * i as f64) as u16;
-
-                let position_update = PositionUpdate {
-                    driver_id,
-                    position: (current_position.0 as i32, current_position.1 as i32),
-                };
-
-                addr.do_send(position_update);
-
-                actix_rt::time::sleep(Duration::from_secs(duration / advancement as u64)).await;
+            let distance = (((msg.x_dest as i32 - msg.x_origin as i32).pow(2) + (msg.y_dest as i32 - msg.y_origin as i32).pow(2)) as f64).sqrt();
+            for _ in 0..distance as u64 {
+                actix_rt::time::sleep(Duration::from_secs(BLOCK_DURATION)).await;
             }
 
             let finish_ride = FinishRide {

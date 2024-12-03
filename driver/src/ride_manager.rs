@@ -68,13 +68,13 @@ impl RideManager {
     pub fn remove_from_ride_and_offers(&mut self, passenger_id: u16) -> Result<(), io::Error> {
         match self.ride_and_offers.remove(&passenger_id) {
             Some(_) => Ok(()), // Se encontró y eliminó
-            None => Err(io::Error::new(
-                ErrorKind::NotFound,
-                format!(
-                    "RideRequest with id {} not found in ride_and_offers",
-                    passenger_id
-                ),
-            )),
+            None => {
+                debug!(
+                "RideRequest with id {} not found in ride_and_offers",
+                passenger_id
+            );
+                Ok(())
+            }
         }
     }
 
@@ -88,13 +88,13 @@ impl RideManager {
                 offers.clear();
                 Ok(())
             }
-            None => Err(io::Error::new(
-                ErrorKind::NotFound,
-                format!(
+            None => {
+                println!(
                     "RideRequest with id {} not found in ride_and_offers",
                     passenger_id
-                ), // Interpolación correcta
-            )),
+                );
+                Ok(())
+            }
         }
     }
 
