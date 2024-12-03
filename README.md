@@ -1,5 +1,11 @@
 [![Review Assignment Due Date](https://classroom.github.com/assets/deadline-readme-button-22041afd0340ce965d47ae6ef1cefeee28c7c493a6346c4f15d667ab976d596c.svg)](https://classroom.github.com/a/GAOi0Fq-)
 
+|Alumno                   | Padrón |
+|-------------------------|--------|
+|Edgargo Francisco Saez   | 104896 |
+|Tomás Vainstein Aranguren| 109043 |
+|Fabio Sicca              | 104892 |
+
 # TP2: Primera entrega de diseño
 
 ## Ejecución
@@ -8,7 +14,7 @@ Primero se inicializa la aplicación de pagos, para esto dentro de la carpeta 'p
 
 `cargo run`
 
-Luego se procede a levantar los drivers, comenzando desde los drives comunes y ejecutando al final el líder. Dentro de la carpeta 'driver':
+Luego se procede a levantar los conductores, comenzando desde los conductores comunes y ejecutando al final el líder. Dentro de la carpeta 'driver':
 
 `cargo run <port> <pos_x> <pos_y>`
 
