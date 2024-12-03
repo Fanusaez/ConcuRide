@@ -922,21 +922,38 @@ impl Driver {
         let driver_id = self.id;
 
         actix::spawn(async move {
-            let distance_x = (msg.x_dest as i32 - msg.x_origin as i32).abs();
-            let distance_y = (msg.y_dest as i32 - msg.y_origin as i32).abs();
-            let steps = distance_x.max(distance_y);
+            let mut current_x = msg.x_origin as i32;
+            let mut current_y = msg.y_origin as i32;
+            let target_x = msg.x_dest as i32;
+            let target_y = msg.y_dest as i32;
 
-            for step in 0..steps {
-                let progress_x = msg.x_origin as i32 + step * (msg.x_dest as i32 - msg.x_origin as i32) / steps;
-                let progress_y = msg.y_origin as i32 + step * (msg.y_dest as i32 - msg.y_origin as i32) / steps;
+            while current_x != target_x || current_y != target_y {
+                // Determinar en qué eje avanzar
+                if current_x != target_x {
+                    if current_x < target_x {
+                        current_x += 1; // Avanzar hacia la derecha
+                    } else {
+                        current_x -= 1; // Avanzar hacia la izquierda
+                    }
+                } else if current_y != target_y {
+                    if current_y < target_y {
+                        current_y += 1; // Avanzar hacia arriba
+                    } else {
+                        current_y -= 1; // Avanzar hacia abajo
+                    }
+                }
 
+                // Enviar actualización de posición
                 addr.do_send(PositionUpdate {
                     driver_id,
-                    position: (progress_x, progress_y),
+                    position: (current_x, current_y),
                 });
+
+                // Esperar antes de avanzar al siguiente paso
                 actix_rt::time::sleep(Duration::from_secs(BLOCK_DURATION)).await;
             }
 
+            // Enviar mensaje de finalización del viaje
             let finish_ride = FinishRide {
                 passenger_id: msg.id,
                 driver_id,
