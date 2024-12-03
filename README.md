@@ -2,6 +2,31 @@
 
 # TP2: Primera entrega de diseño
 
+## Ejecución
+
+Primero se inicializa la aplicación de pagos, para esto dentro de la carpeta 'payment_app' se debe ejecutar el siguiente comando:
+
+`cargo run`
+
+Luego se procede a levantar los drivers, comenzando desde los drives comunes y ejecutando al final el líder. Dentro de la carpeta 'driver':
+
+`cargo run <port> <pos_x> <pos_y>`
+
+Por ejemplo, si en el archivo 'config.txt' se tienen a los drivers 6002, 6001 y 6000, se ejecutaría:
+
+`cargo run 6002 5 9`
+
+`cargo run 6001 8 10`
+
+`cargo run 6000 0 0`
+
+Finalmente se ejecutan los pasajeros. Dentro de la carpeta 'passanger':
+
+`cargo run 9000 rides/ride9000.json`
+
+`cargo run 9001 rides/ride9001.json`
+
+
 ## Aplicaciones
 
 Se definen tres aplicaciones: una de conductores, una de pasajeros y otra de pagos.
@@ -237,6 +262,42 @@ El esquema de aplicaciones se mantiene igual al de la entrega inicial.
 
 ![Esquema](./diagramas/concu_1-Página-3.jpg)
 
+## Arquitectura
+
+### Payment App
+
+Esta aplicación lanza un puerto de escucha (7500) donde espera nuevas conexiones por parte del conductor líder o nuevo líder llegado el caso.
+Al llegar una nueva conexión crea 3 actores: SocketReader, PaymentApp, SocketWriter.
+
+**SocketReader:** Encargado de leer los mensajes que llegan por el socket TCP para formatearlo en un mensaje que el actor
+PaymentApp entienda.
+
+**PaymentApp:** Se encarga de procesar los mensajes de los pagos y enviar las respuestas al SocketWriter.
+
+**SocketWriter:** Recibe las respuestas de PaymentApp, las serializa y las envía hacia el conductor líder.
+
+### Passenger
+
+Esta aplicación se conecta mediante TCP al conductor líder a quien le envía pedidos de viajes. Por otro lado, abre un puerto
+de escucha en el puerto pasado por parámetro al ejecutar la aplicación, donde esperará la reconexión del nuevo líder si el
+anterior se desconecta.
+Contiene 2 actores: Passenger y TcpSender
+
+**Passenger:** Contiene la lógica relacionada con los viajes.
+
+**TcpSender:** Recibe los mensajes de Passenger para serializarlos y enviarlos hacia el conductor líder.
+
+### Driver
+
+Dependiendo si se trata del conductor líder o un conductor común su comportamiento varía. Si se trata del conductor líder
+se conecta a los conductores y establece un puerto de escucha para que se conecten a él los pasajeros. Por otro lado, 
+un conductor común sólo establece un puerto de escucha para que se conecte el conductor líder.
+
+El conductor líder actúa como un servidor, comunicando las peticiones de los pasajeros con los conductores. Además es quien
+se conecta a la aplicación de pagos para verificar la validez de los mismos.
+
+Por útlimo, también se comunica mediante 'pings' con todos los conductores y viceversa.
+
 ## Algoritmo de decisión
 
 Utilizamos el algoritmo del anillo para manejar la elección del nuevo
@@ -252,23 +313,29 @@ con id más alto.
 
 Modificamos algunos mensajes respecto a la primera entrega y agregamos algunos nuevos.
 
-| **Message**             | **Sender**      | **Receiver**       | **Description**                                                                          |
-|--------------------------|-----------------|--------------------|------------------------------------------------------------------------------------------|
-| RideRequest             | Passenger       | LeaderDriver       | Sends coordinates and payment of new ride                                               |
-| SendPayment             | LeaderDriver    | PaymentApp         | Sends the trip payment to the payment ride                                              |
-| PaymentRejected         | PaymentApp      | LeaderDriver       | Informs that the payment was rejected                                                   |
-| PaymentAccepted         | PaymentApp      | LeaderDriver       | Informs that the payment was accepted                                                   |
-| RideRequest             | LeaderDriver    | Driver             | Sends coordinates to near starting point drivers                                        |
-| PositionUpdate          | Driver          | LeaderDriver       | Informs current location of the driver                                                  |
-| DeclineRide             | Driver          | LeaderDriver       | Rejects ride offer                                                                      |
-| AcceptRide              | Driver          | LeaderDriver       | Accepts ride offer                                                                      |
-| FinishRide              | Driver          | LeaderDriver       | Informs that the ride has finished to the leader driver                                 |
-| FinishRide              | LeaderDriver    | Passenger          | Informs that the ride has finished to the passenger and removes it from pending_rides   |
-| PayRide                 | LeaderDriver    | Driver             | Sends ride’s payment to the driver                                                     |
-| Ping                    | LeaderDriver    | Driver             | Updates the last ping response from leader and replies with a pong                      |
-| Ping                    | Driver          | LeaderDriver       | Updates the last ping response from driver                                              |
-| NewLeader               | Driver          | Driver             | Informs the new leader of its role and the rest of the drivers that the new leader has been appointed |
-| NewLeaderAttributes     | Driver          | Driver             | Updates the new leader driver with leader attributes                                    |
-| RestartDriverSearch     | Driver          | LeaderDriver       | Restarts the search of a driver for the passenger                                       |
-| DriverReconnection      | LeaderDriver    | LeaderDriver       | Reestablishes the connection between leader and fallen drivers                          |
+### Mensajes sobre el modelo
 
+| **Message**             | **Sender**      | **Receiver**       | **Payload**                                                                                  | **Trigger**    |
+|-------------------------|-----------------|-------------------|-----------------------------------------------------------------------------------------------|----------------|
+| RideRequest             | Passenger       | LeaderDriver       | id: u16, x_origin: u16, y_origin: u16, x_dest: u16, y_dest: u16                              | Start actor    |
+| SendPayment             | LeaderDriver    | PaymentApp         | id: u16, amount: i32                                                                         | RideRquest     |
+| PaymentRejected         | PaymentApp      | LeaderDriver       | id: u16                                                                                      | SendPayment    |
+| PaymentAccepted         | PaymentApp      | LeaderDriver       | id: u16                                                                                      | SendPayment    |
+| RideRequest             | LeaderDriver    | Driver             | id: u16, x_origin: u16, y_origin: u16, x_dest: u16, y_dest: u16                              | PaymentAccepted|
+| PositionUpdate          | Driver          | LeaderDriver       | driver_id: u16, position: (i32,i32)                                                          | RideRequest    |
+| DeclineRide             | Driver          | LeaderDriver       | passenger_id: u16, driver_id: u16                                                            | RideRequest    |
+| AcceptRide              | Driver          | LeaderDriver       | passenger_id: u16, driver_id: u16                                                            | RideRequest    |
+| FinishRide              | Driver          | LeaderDriver       | passenger_id: u16, driver_id: u16                                                            | Time           |
+| FinishRide              | LeaderDriver    | Passenger          | passenger_id: u16, driver_id: u16                                                            | Time           |
+| PayRide                 | LeaderDriver    | Driver             | ride_id: u16, amount: u16                                                                    | FinishRide     |
+
+
+### Mensajes sobre conexiones
+
+| **Message**             | **Sender**      | **Receiver**       | **Payload**                                                                                  | **Trigger**    |
+|-------------------------|-----------------|--------------------|----------------------------------------------------------------------------------------------|----------------|
+| Ping                    | LeaderDriver    | Driver             | id_sender: u16, id_receiver: u16                                                             | Start actor    |
+| Ping                    | Driver          | LeaderDriver       | id_sender: u16, id_receiver: u16                                                             | Start actor    |
+| NewLeader               | Driver          | Driver             | leader_id: u16, drivers_id: Vec<u16>                                                         | ! Ping         |
+| NewConnection           | Driver          | Leader             | passenger_id: u16, used_port: u16                                                            | New connection |
+| RideRequestReconnection | Leader          | Passenger          | passenger_id: u16, state: State                                                              | NewConnection  |
