@@ -555,7 +555,6 @@ impl Driver {
         let ride_request = self.ride_manager.get_pending_ride_request(msg.passenger_id)?;
 
         // Search for another driver and send the ride request
-        // todo: esto es igual a lo de arruba, deberiamos borrar este mensaje y que se envie un declined ride en pause_And_restart...
         self.search_driver_and_send_ride(ride_request, addr, ctx)?;
 
         Ok(())
@@ -568,7 +567,6 @@ impl Driver {
     /// * `ctx` - The context of the driver
     pub fn handle_finish_ride_as_leader(&mut self, msg: FinishRide, ctx: &mut Context<Self>) -> Result<(), io::Error> {
         // Remove the ride from the pending rides
-        // todo: ver manejo de errores, la funcion esta la hardcodee para que no devuelva un error
         self.ride_manager.remove_ride_from_pending(msg.passenger_id)?;
         self.ride_manager.remove_driver_and_passenger(msg.driver_id)?;
 
@@ -578,13 +576,12 @@ impl Driver {
         self.send_message_to_passenger(msg_message_type, msg.passenger_id, ctx)?;
 
         // Pay ride to driver
-        // todo: en caso de ser un lider nuevo, no va a encontrar el pago, que hago en este caso?
         match self.ride_manager.get_ride_from_paid_rides(msg.passenger_id) {
             Ok(payment) => {
                 let pay_ride_msg = PayRide { ride_id: msg.passenger_id, amount: payment.amount };
                 self.send_payment_to_driver(msg.driver_id, pay_ride_msg, ctx)?;
             }
-            // todo: no encuentra porque se cambio de lider (esta bien asi?)
+
             Err(e) => debug!("Error getting payment from paid rides: {:?}", e),
         }
 
@@ -1005,6 +1002,7 @@ impl Driver {
     }
 
     /// Handles the new passenger connection message, only used by the leader
+    /// Sets up the connection with the passenger
     /// Used when a new leader is appointed and needs to connect to the passengers
     pub fn handle_new_passenger_connection_as_leader(&mut self, msg: NewPassengerConnection, ctx: &mut Context<Self>) -> Result<(), io::Error> {
         // Saves the write stream of the passenger and the id
