@@ -341,7 +341,7 @@ impl Handler<DeadDriver> for Driver {
     fn handle(&mut self, msg: DeadDriver, ctx: &mut Self::Context) -> Self::Result {
         if self.is_leader.load(Ordering::SeqCst) {
             log(&format!("DRIVER {} IS DEAD", msg.driver_id), "DISCONNECTION");
-            self.handle_dead_driver_as_leader(ctx.address(), msg).unwrap();
+            self.handle_dead_driver_as_leader(ctx.address(), msg, ctx).unwrap();
         }
         else {
             eprintln!("Driver {} is not the leader, should not receive this message", self.id);
@@ -402,6 +402,19 @@ impl Handler<NewPassengerHalfWrite> for Driver {
         self.passengers_write_half.insert(msg.passenger_id, Some(msg.write_half.unwrap()));
     }
 
+}
+
+impl Handler<DriverReconnection> for Driver {
+    type Result = ();
+
+    fn handle(&mut self, msg: DriverReconnection, ctx: &mut Self::Context) -> Self::Result {
+        if self.is_leader.load(Ordering::SeqCst) {
+            self.handle_driver_reconnection_as_leader(msg, ctx);
+        }
+        else {
+            eprintln!("Driver {} is not the leader, should not receive this message", self.id);
+        }
+    }
 }
 
 impl Actor for LastPingManager {

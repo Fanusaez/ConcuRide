@@ -8,6 +8,7 @@ use tokio::io::{split, AsyncBufReadExt, BufReader, AsyncWriteExt, WriteHalf, Rea
 use tokio::net::{TcpListener, TcpStream};
 use std::net::{UdpSocket};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread::sleep;
 use tokio_stream::wrappers::LinesStream;
 use actix::prelude::*;
 
@@ -16,6 +17,7 @@ use crate::models::*;
 use crate::utils::*;
 use crate::ride_manager::*;
 use std::time::Instant;
+use futures::SinkExt;
 use log::{debug, info};
 
 pub struct LastPingManager {
@@ -446,11 +448,6 @@ impl Driver {
         // Insert the ride in paid rides
         self.ride_manager.insert_ride_in_paid_rides(msg.id, msg)?;
 
-        if self.id == 6002 {
-            println!("drivers disponibles: {:?}", self.active_drivers.keys());
-            println!("drivers last position: {:?}", self.drivers_last_position);
-        }
-
         Ok(())
     }
 
@@ -624,7 +621,7 @@ impl Driver {
     /// # Arguments
     /// * `addr` - The address of the driver
     /// * `msg` - The message containing the dead driver
-    pub fn handle_dead_driver_as_leader(&mut self, addr: Addr<Self>, msg: DeadDriver) -> Result<(), io::Error> {
+    pub fn handle_dead_driver_as_leader(&mut self, addr: Addr<Self>, msg: DeadDriver, ctx: &mut Context<Self>) -> Result<(), io::Error> {
 
         let dead_driver_id = msg.driver_id;
 
@@ -634,6 +631,8 @@ impl Driver {
         self.dead_drivers.push(dead_driver_id);
         // Remove the driver from the drivers last position
         self.drivers_last_position.remove(&dead_driver_id);
+        // Remove the driver from the drivers status
+        self.drivers_status.remove(&dead_driver_id);
 
         // Cover case where the driver was offered a ride and did not respond
         for (passenger_id, drivers_id) in self.ride_manager.ride_and_offers.iter_mut() {
@@ -644,7 +643,55 @@ impl Driver {
                 }
             }
         }
+        /// todo: volver a establecer relacion con el driver
+        self.reestablish_connection_with_driver(dead_driver_id, ctx);
         Ok(())
+    }
+
+    pub fn reestablish_connection_with_driver(&mut self, driver_id: u16, ctx: &mut Context<Self>) {
+        let addr = ctx.address();
+        let mut connection_established = false;
+        ctx.spawn(
+            async move {
+                while !connection_established {
+                    let connection_result = TcpStream::connect(format!("127.0.0.1:{}", driver_id)).await;
+                    match connection_result {
+                        Ok(stream) => {
+                            let (read, write) = split(stream);
+                            let full_stream = (Some(read), Some(write));
+                            // Sends stream and id of the driver to leader
+                            addr.do_send(DriverReconnection {
+                                driver_id,
+                                full_stream,
+                            });
+                            connection_established = true;
+                        }
+                        Err(e) => {
+                            debug!("Error connecting to driver {}: {:?}", driver_id, e);
+
+                            // try later
+                            tokio::time::sleep(Duration::from_secs(3)).await;
+                        }
+                    }
+                }
+            }
+                .into_actor(self)
+        );
+    }
+
+    pub fn handle_driver_reconnection_as_leader(&mut self, mut msg: DriverReconnection, ctx: &mut Context<Self>) {
+        log(&format!("CONNECTION WITH DRIVER {} REESTABLISHED", msg.driver_id), "NEW_CONNECTION");
+
+        if let Some(read) = msg.full_stream.0 {
+            Driver::add_stream(LinesStream::new(BufReader::new(read).lines()), ctx);
+        }
+
+        // Updates leader attributes with the new driver
+        self.active_drivers.insert(msg.driver_id, (None, msg.full_stream.1));
+        self.dead_drivers.retain(|&x| x != msg.driver_id);
+        self.drivers_last_position.insert(msg.driver_id, (0, 0));
+        self.drivers_status.insert(msg.driver_id, DriverStatus { last_response: Some(Instant::now()), is_alive: true });
+
     }
 
     /// Driver's function
@@ -1107,8 +1154,8 @@ impl Driver {
 
         for (driver_id, (x_driver, y_driver)) in self.drivers_last_position.iter() {
 
-            // If the driver was already offered the ride, skip it
-            if self.ride_manager.driver_has_already_been_offered_ride(message.id, *driver_id) {
+            // If the driver was already offered the ride or its not active, skip it
+            if self.ride_manager.driver_has_already_been_offered_ride(message.id, *driver_id) || !self.active_drivers.contains_key(driver_id) {
                 continue;
             }
 

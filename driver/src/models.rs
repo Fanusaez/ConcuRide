@@ -161,6 +161,14 @@ pub struct NewPassengerConnection {
 
 #[derive(Message, Debug)]
 #[rtype(result = "()")]
+pub struct DriverReconnection {
+    pub driver_id: u16,
+    pub full_stream: FullStream
+}
+
+
+#[derive(Message, Debug)]
+#[rtype(result = "()")]
 pub struct NewPassengerHalfWrite {
     pub passenger_id: u16,
     pub write_half: Option<WriteHalf<TcpStream>>,

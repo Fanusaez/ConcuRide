@@ -1,3 +1,4 @@
+//! # Mi Crate
 use crate::driver::Driver;
 use crate::utils::read_config_file;
 
