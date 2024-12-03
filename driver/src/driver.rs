@@ -928,32 +928,28 @@ impl Driver {
             let target_y = msg.y_dest as i32;
 
             while current_x != target_x || current_y != target_y {
-                // Determinar en qué eje avanzar
                 if current_x != target_x {
                     if current_x < target_x {
-                        current_x += 1; // Avanzar hacia la derecha
+                        current_x += 1;
                     } else {
-                        current_x -= 1; // Avanzar hacia la izquierda
+                        current_x -= 1;
                     }
                 } else if current_y != target_y {
                     if current_y < target_y {
-                        current_y += 1; // Avanzar hacia arriba
+                        current_y += 1;
                     } else {
-                        current_y -= 1; // Avanzar hacia abajo
+                        current_y -= 1;
                     }
                 }
 
-                // Enviar actualización de posición
                 addr.do_send(PositionUpdate {
                     driver_id,
                     position: (current_x, current_y),
                 });
 
-                // Esperar antes de avanzar al siguiente paso
                 actix_rt::time::sleep(Duration::from_secs(BLOCK_DURATION)).await;
             }
 
-            // Enviar mensaje de finalización del viaje
             let finish_ride = FinishRide {
                 passenger_id: msg.id,
                 driver_id,
