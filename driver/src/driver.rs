@@ -39,11 +39,11 @@ impl PartialEq for States {
 
 #[derive(Clone, Debug)]
 pub struct DriverStatus {
-    pub last_response: Option<Instant>, // Último tiempo de respuesta
-    pub is_alive: bool,                 // Estado del driver
+    pub last_response: Option<Instant>,
+    pub is_alive: bool,
 }
 
-const LIDER_PORT_IDX: usize = 0;
+const LEADER_PORT_IDX: usize = 0;
 const PING_INTERVAL: u64 = 5;
 const RESTART_DRIVER_SEARCH_INTERVAL: u64 = 5;
 const PROBABILITY_OF_ACCEPTING_RIDE: f64 = 0.99;
@@ -105,10 +105,10 @@ impl Driver {
         passengers_id: Vec<u16>,
     ) -> Result<(), io::Error> {
         // Driver-leader attributes
-        let should_be_leader = port == drivers_ports[LIDER_PORT_IDX];
+        let should_be_leader = port == drivers_ports[LEADER_PORT_IDX];
         let is_leader = should_be_leader;
         let is_leader_arc = Arc::new(AtomicBool::new(is_leader));
-        let leader_port = drivers_ports[LIDER_PORT_IDX];
+        let leader_port = drivers_ports[LEADER_PORT_IDX];
         let last_ping_manager = LastPingManager {
             last_ping: Instant::now(),
         }
@@ -129,7 +129,7 @@ impl Driver {
         let socket = UdpSocket::bind(format!("127.0.0.1:{}", port_socket))?;
 
         // Remove the leader port from the list of drivers
-        drivers_ports.remove(LIDER_PORT_IDX);
+        drivers_ports.remove(LEADER_PORT_IDX);
 
         let drivers_id = drivers_ports.clone();
 
