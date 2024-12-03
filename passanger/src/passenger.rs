@@ -11,6 +11,8 @@ use tokio::io::{split, AsyncBufReadExt, AsyncWriteExt, BufReader, WriteHalf};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_stream::wrappers::LinesStream;
 
+const TIME_TO_RIDE_REQUEST: u64 = 10;
+
 pub enum Sates {
     /// Before requesting a ride or after drop off
     Idle,
@@ -121,7 +123,7 @@ impl Handler<FinishRide> for Passenger {
         let addr = ctx.address();
         if let Some(ride) = self.rides.pop() {
             tokio::spawn(async move {
-                tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+                tokio::time::sleep(std::time::Duration::from_secs(TIME_TO_RIDE_REQUEST)).await;
                 addr.do_send(ride)
             });
         }

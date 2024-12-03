@@ -87,9 +87,6 @@ impl StreamHandler<Result<String, io::Error>> for Driver {
 
 }
 
-/// TODO: GENERAL DE TODOS LOS HANDLERS, DEBERIAMOS PASAR TODA LA FUNCIONALIDAD A DRIVER, SOLO LOS PRINTS DEJARLOS CAPAZ
-
-
 impl Handler<RideRequest> for Driver {
     type Result = ();
 
@@ -251,21 +248,22 @@ impl Handler<NewConnection> for Driver {
     type Result = ();
 
     fn handle(&mut self, msg: NewConnection, ctx: &mut Self::Context) -> Self::Result {
+        // New passenger id and old passenger id
         let new_passenger_id = msg.passenger_id;
         let old_passenger_id = msg.used_port;
 
-        // Ver si ya estaba la conexion con el pasajero
+        // Check if the passenger was already connected
         let previous_connection = self.passengers_write_half.contains_key(&new_passenger_id);
 
-        // en caso de reconexion, borrar la conexion anterior
+        // If previous connection, remove the previous connection
         if previous_connection {
             log(&format!("RE-CONNECTED WITH PASSENGER {}", new_passenger_id), "INFO");
             match self.passengers_write_half.remove(&new_passenger_id) {
                 Some(_write_half) => {
-                    //eprintln!("Se eliminó la conexión anterior con el pasajero {}", new_passenger_id);
+                    debug!("Old connection deleted, passenger id {}", new_passenger_id);
                 }
                 None => {
-                    eprintln!("No se encontró la conexión anterior con el pasajero {}", new_passenger_id);
+                    debug!("Connection not found for passenger {}", new_passenger_id);
                 }
             }
         }
@@ -273,14 +271,14 @@ impl Handler<NewConnection> for Driver {
             log(&format!("NEW CONNECTION WITH PASSENGER {}", new_passenger_id), "NEW_CONNECTION");
         }
 
-        // Reemplazar la clave
+        // Store the new connection
         if let Some(write_half_passenger) = self.passengers_write_half.remove(&old_passenger_id) {
             self.passengers_write_half.insert(new_passenger_id, write_half_passenger);
         } else {
-            eprintln!("No se encontró el puerto usado por el pasajero");
+            debug!("No previous connection found for passenger {}", old_passenger_id);
         }
 
-        // si ya hubo alguna conexion, verificar que no haya un RideRequest pendiente
+        // If previous connection, verify if there is a pending ride request and inform the passenger
         if previous_connection {
             self.verify_pending_ride_request(new_passenger_id, ctx).unwrap();
         }
@@ -288,15 +286,24 @@ impl Handler<NewConnection> for Driver {
     }
 }
 
-/// Used when new leader is elected and leader need to reconnect with the passengers and inform new leader
+/// Handles the new passenger connection message, only used by the leader
+/// After connecting with passengers as new leader, leader will set up the connection with the new passenger
 impl Handler<NewPassengerConnection> for Driver {
     type Result = ();
 
     fn handle(&mut self, msg: NewPassengerConnection, ctx: &mut Self::Context) -> Self::Result {
-        self.handle_new_passenger_connection_as_leader(msg, ctx).unwrap();
+        if self.is_leader.load(Ordering::SeqCst) {
+            self.handle_new_passenger_connection_as_leader(msg, ctx).unwrap();
+        }
+        else {
+            eprintln!("Driver {} is not the leader, should not receive this message", self.id);
+        }
     }
 }
 
+/// Handles the ping message
+/// If the driver is the leader, will handle the ping as leader
+/// If the driver is not the leader, will handle the ping as driver
 impl Handler<Ping> for Driver {
     type Result = ();
 
@@ -313,6 +320,7 @@ impl Handler<Ping> for Driver {
 
 
 /// Handles the send ping to message
+/// If the driver is the leader, will send the ping to the driver
 impl Handler<SendPingTo> for Driver {
     type Result = ();
 
@@ -325,10 +333,11 @@ impl Handler<SendPingTo> for Driver {
     }
 }
 
+
+/// Handles the position update message
 impl Handler<PositionUpdate> for Driver {
     type Result = ();
-    /// Handles the position update message
-    /// If the driver is the leader, will update the position of the driver
+
     fn handle(&mut self, msg: PositionUpdate, _ctx: &mut Self::Context) -> Self::Result {
         if self.is_leader.load(Ordering::SeqCst) {
             self.handle_position_update_as_leader(msg).unwrap();
@@ -339,7 +348,7 @@ impl Handler<PositionUpdate> for Driver {
     }
 }
 
-
+/// Handles the PayRide message, received after finishing a ride
 impl Handler<PayRide> for Driver {
     type Result = ();
     fn handle(&mut self, msg: PayRide, _ctx: &mut Self::Context) -> Self::Result {
@@ -351,6 +360,7 @@ impl Handler<PayRide> for Driver {
     }
 }
 
+/// Handles the DeadDriver message, received when a driver is disconnected
 impl Handler<DeadDriver> for Driver {
     type Result = ();
 
@@ -365,6 +375,8 @@ impl Handler<DeadDriver> for Driver {
     }
 }
 
+/// Handles the DeadLeader message, received when the leader is disconnected
+/// Only used by the driver
 impl Handler<DeadLeader> for Driver {
     type Result = ();
 
@@ -379,6 +391,7 @@ impl Handler<DeadLeader> for Driver {
     }
 }
 
+/// Handles the NewLeader message, received when a new leader is appointed
 impl Handler<NewLeader> for Driver {
     type Result = ();
 
@@ -397,6 +410,7 @@ impl Handler<NewLeader> for Driver {
     }
 }
 
+/// Handles the NewLeaderAttributes message, received when the new leader sends the new leader attributes
 impl Handler<NewLeaderAttributes> for Driver {
     type Result = ();
 
@@ -411,6 +425,7 @@ impl Handler<NewLeaderAttributes> for Driver {
     }
 }
 
+/// Handles the NewPassengerHalfWrite message, used at the start function to store the write half of the passenger
 impl Handler<NewPassengerHalfWrite> for Driver {
     type Result = ();
 
@@ -420,6 +435,8 @@ impl Handler<NewPassengerHalfWrite> for Driver {
 
 }
 
+/// Handles the driver reconnection message, only used by the leader
+/// After reconnecting with the driver, the leader will set up the connection with the driver
 impl Handler<DriverReconnection> for Driver {
     type Result = ();
 
@@ -433,6 +450,8 @@ impl Handler<DriverReconnection> for Driver {
     }
 }
 
+
+/// Ping Implementation
 impl Actor for LastPingManager {
     type Context = Context<Self>;
 }
