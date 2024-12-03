@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use tokio::io::{ReadHalf, WriteHalf};
 use tokio::net::TcpStream;
 
-// Struct que representa las coordenadas de un viaje.
+/// Contains the ride_id, the origin coordinates and destination coordinates
 #[derive(Serialize, Deserialize, Debug, Clone, Message)]
 #[rtype(result = "()")]
 pub struct RideRequest {
@@ -14,6 +14,7 @@ pub struct RideRequest {
     pub y_dest: u16,
 }
 
+/// Contains the passanger id and the driver id who made the ride
 #[derive(Serialize, Deserialize, Message, Debug, Clone, Copy)]
 #[rtype(result = "()")]
 pub struct FinishRide {
@@ -21,6 +22,8 @@ pub struct FinishRide {
     pub driver_id: u16,
 }
 
+/// Contains the passanger id and the id of the driver who declined
+/// the ride
 #[derive(Serialize, Deserialize, Message, Debug, Clone, Copy)]
 #[rtype(result = "()")]
 pub struct DeclineRide {
@@ -28,13 +31,14 @@ pub struct DeclineRide {
     pub driver_id: u16,
 }
 
+/// Contains the id of the ride whose payment was rejected
 #[derive(Serialize, Deserialize, Message, Debug, Clone, Copy)]
 #[rtype(result = "()")]
 pub struct PaymentRejected {
     pub id: u16,
 }
 
-// se usaria para que el pasajero sepa la posicion, despues ver si se usa o no
+/// Contains driver id, passanger id and current position of the driver
 #[derive(Serialize, Deserialize, Debug, Clone, Message)]
 #[rtype(result = "()")]
 pub struct PositionUpdate {
@@ -43,6 +47,7 @@ pub struct PositionUpdate {
     pub current_position: (u32, u32),
 }
 
+/// Contains the passanger id and the used port
 #[derive(Serialize, Deserialize, Debug, Clone, Message)]
 #[rtype(result = "()")]
 pub struct NewConnection {
@@ -50,6 +55,7 @@ pub struct NewConnection {
     pub used_port: u16,
 }
 
+/// Contains the passenger id and the state as a string
 #[derive(Serialize, Deserialize, Debug, Clone, Message)]
 #[rtype(result = "()")]
 pub struct RideRequestReconnection {
@@ -57,6 +63,8 @@ pub struct RideRequestReconnection {
     pub state: String,
 }
 
+/// Contains an Option of the read half part of a Tcp stream and an
+/// Option of the write half of the same stream
 #[derive(Message, Debug)]
 #[rtype(result = "()")]
 pub struct NewLeaderStreams {
@@ -64,6 +72,7 @@ pub struct NewLeaderStreams {
     pub write_half: Option<WriteHalf<TcpStream>>,
 }
 
+/// Used to stop the actors context to free resources
 #[derive(Message, Debug)]
 #[rtype(result = "()")]
 pub struct StopActor;

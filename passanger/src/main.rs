@@ -1,4 +1,4 @@
-//! # Mi Crate
+//! Creates a passenger to connect to the leader driver
 use crate::models::*;
 use crate::passenger::Passenger;
 
@@ -12,7 +12,7 @@ mod models;
 /// Initial Leader Port
 pub const LEADER_PORT: u16 = 6000;
 
-/// Recibe un puerto y un archivo de destinos(rides) y crea el actor Pasajero
+/// Receives a port and destinations file (rides) and creates the Passanger actor
 #[actix_rt::main]
 async fn main() -> std::io::Result<()> {
     let args: Vec<String> = std::env::args().collect();

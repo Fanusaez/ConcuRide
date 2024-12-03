@@ -15,7 +15,7 @@ pub enum Sates {
     Idle,
     /// After requesting a ride and paying, waiting for a driver to accept the ride
     WaitingDriver,
-    /// Riding in a car, necesario????
+    /// Riding in a car
     Traveling,
 }
 
@@ -28,6 +28,9 @@ impl PartialEq for Sates {
     }
 }
 
+/// Contains the passenger id, the addres of the Tcp Sender actor,
+/// the possible states of the passenger and the rides that the
+/// passenger will make
 pub struct Passenger {
     /// The port of the passenger
     id: u16,
@@ -234,7 +237,14 @@ impl Passenger {
         Ok(())
     }
 
-    /// Creates the actor Passenger instance
+    /// Creates an actor Passenger instance
+    /// # Arguments
+    /// `port` - The port that the actor will be listening in case the leader driver
+    /// disconnects
+    /// `stream` - The Tcp Stream from which the passenger will listen to new messages
+    /// from the driver or send them to him
+    /// # Returns
+    /// addres of the new passenger actor
     fn create_actor_instance(port: u16, stream: TcpStream) -> Addr<Passenger> {
         Passenger::create(|ctx| {
             let (read, write_half) = split(stream);
@@ -244,6 +254,13 @@ impl Passenger {
             Passenger::new(port, addr_tcp)
         })
     }
+
+    /// Creates a new Passenger
+    /// # Arguments
+    /// `port` - The port that the actor will be listening in case the leader driver
+    /// disconnects
+    /// `tcp_sender` - Address of the actor that will send messages to the leader
+    /// driver through the socket
     pub fn new(port: u16, tcp_sender: Addr<TcpSender>) -> Self {
         Passenger {
             id: port,
@@ -255,6 +272,7 @@ impl Passenger {
 }
 
 
+/// Contains an Option of the write half of a tcp stream
 pub struct TcpSender {
     /// The write half of the TcpStream
     write: Option<WriteHalf<TcpStream>>,
@@ -266,6 +284,10 @@ impl Actor for TcpSender {
 }
 
 impl TcpSender {
+    /// Returns a TcpSender
+    /// # Arguments
+    /// `write` - Option of a WriteHalf of a TcpStream that the TcpSender will
+    /// use to send messages
     pub fn new(write: Option<WriteHalf<TcpStream>>) -> Self {
         TcpSender { write }
     }
