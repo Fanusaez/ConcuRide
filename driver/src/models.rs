@@ -1,10 +1,10 @@
-use std::collections::HashMap;
+use crate::driver::{DriverStatus, FullStream};
 use actix::Message;
 use serde::{Deserialize, Serialize};
-use tokio::io::{ReadHalf, WriteHalf};
-use tokio::net::{TcpStream};
+use std::collections::HashMap;
 use std::time::Instant;
-use crate::driver::{DriverStatus, FullStream};
+use tokio::io::{ReadHalf, WriteHalf};
+use tokio::net::TcpStream;
 
 /// RideRequest struct, ver como se puede importar desde otro archivo, esto esta en utils.rs\
 #[derive(Serialize, Deserialize, Message, Debug, Clone, Copy)]
@@ -169,9 +169,8 @@ pub struct NewPassengerConnection {
 #[rtype(result = "()")]
 pub struct DriverReconnection {
     pub driver_id: u16,
-    pub full_stream: FullStream
+    pub full_stream: FullStream,
 }
-
 
 #[derive(Message, Debug)]
 #[rtype(result = "()")]
@@ -182,9 +181,16 @@ pub struct NewPassengerHalfWrite {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum RingMessage {
-    Election { participants: Vec<u16> },
-    Coordinator { leader_id: u16, participants: Vec<u16> },
-    Ack {id_origin: u16},
+    Election {
+        participants: Vec<u16>,
+    },
+    Coordinator {
+        leader_id: u16,
+        participants: Vec<u16>,
+    },
+    Ack {
+        id_origin: u16,
+    },
 }
 
 #[derive(Message)]

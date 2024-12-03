@@ -1,9 +1,9 @@
-use std::collections::HashMap;
-use std::{io};
-use std::io::{ErrorKind};
+use crate::models::*;
 use log::debug;
 use serde::{Deserialize, Serialize};
-use crate::models::*;
+use std::collections::HashMap;
+use std::io;
+use std::io::ErrorKind;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct RideManager {
@@ -56,7 +56,6 @@ impl RideManager {
         passenger_id: u16,
         driver_id: u16,
     ) -> Result<(), io::Error> {
-
         if let Some(offers) = self.ride_and_offers.get_mut(&passenger_id) {
             offers.push(driver_id);
         } else {
@@ -71,22 +70,31 @@ impl RideManager {
             Some(_) => Ok(()), // Se encontró y eliminó
             None => Err(io::Error::new(
                 ErrorKind::NotFound,
-                format!("RideRequest with id {} not found in ride_and_offers", passenger_id),
+                format!(
+                    "RideRequest with id {} not found in ride_and_offers",
+                    passenger_id
+                ),
             )),
         }
     }
 
     /// Removes all the offers from the ride_and_offers hashmap to the passenger_id
-    pub fn remove_offers_from_ride_and_offers(&mut self, passenger_id: u16) -> Result<(), io::Error> {
-        match self.ride_and_offers.get_mut(&passenger_id){
+    pub fn remove_offers_from_ride_and_offers(
+        &mut self,
+        passenger_id: u16,
+    ) -> Result<(), io::Error> {
+        match self.ride_and_offers.get_mut(&passenger_id) {
             Some(offers) => {
                 offers.clear();
                 Ok(())
             }
             None => Err(io::Error::new(
                 ErrorKind::NotFound,
-                format!("RideRequest with id {} not found in ride_and_offers", passenger_id), // Interpolación correcta
-            ))
+                format!(
+                    "RideRequest with id {} not found in ride_and_offers",
+                    passenger_id
+                ), // Interpolación correcta
+            )),
         }
     }
 
@@ -177,7 +185,7 @@ impl RideManager {
     /// Removes PaymentAccepted with the information of the payment and returns it
     pub fn get_ride_from_paid_rides(&mut self, ride_id: u16) -> Result<PaymentAccepted, io::Error> {
         match self.paid_rides.remove(&ride_id) {
-            Some(msg) => {Ok(msg)}
+            Some(msg) => Ok(msg),
             None => Err(io::Error::new(
                 ErrorKind::NotFound,
                 format!("PaymentAccepted not found for ride_id: {}", ride_id),
@@ -186,7 +194,11 @@ impl RideManager {
     }
 
     /// Inserts the driver_id and passenger_id in the driver_and_passenger hashmap
-    pub fn insert_driver_and_passenger(&mut self, driver_id: u16, passenger_id: u16) -> Result<(), io::Error> {
+    pub fn insert_driver_and_passenger(
+        &mut self,
+        driver_id: u16,
+        passenger_id: u16,
+    ) -> Result<(), io::Error> {
         self.driver_and_passenger.insert(driver_id, passenger_id);
         Ok(())
     }
@@ -196,9 +208,12 @@ impl RideManager {
         match self.driver_and_passenger.remove(&driver_id) {
             Some(_) => Ok(()),
             None => {
-                debug!("Driver with id {} not found in driver_and_passenger", driver_id);
+                debug!(
+                    "Driver with id {} not found in driver_and_passenger",
+                    driver_id
+                );
                 Ok(())
-            },
+            }
         }
     }
 
@@ -207,7 +222,10 @@ impl RideManager {
             Some(&passenger_id) => Ok((driver_id, passenger_id)),
             None => Err(io::Error::new(
                 ErrorKind::NotFound,
-                format!("Driver with id {} not found in driver_and_passenger", driver_id),
+                format!(
+                    "Driver with id {} not found in driver_and_passenger",
+                    driver_id
+                ),
             )),
         }
     }
@@ -215,17 +233,13 @@ impl RideManager {
     pub fn is_driver_assigned_to_passenger(&self, driver_id: u16) -> bool {
         self.driver_and_passenger.contains_key(&driver_id)
     }
-
 }
-
-
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use models::RideRequest;
     use crate::models;
-
+    use models::RideRequest;
 
     #[test]
     fn test_insert_and_remove_pending_ride() {
@@ -240,17 +254,30 @@ mod tests {
         };
 
         // Insert ride
-        assert!(ride_manager.insert_ride_in_pending(ride_request.clone()).is_ok());
+        assert!(ride_manager
+            .insert_ride_in_pending(ride_request.clone())
+            .is_ok());
         {
             assert!(ride_manager.pending_rides.contains_key(&ride_request.id));
-            assert_eq!(ride_manager.get_pending_ride_request(ride_request.id).unwrap().id, 1);
+            assert_eq!(
+                ride_manager
+                    .get_pending_ride_request(ride_request.id)
+                    .unwrap()
+                    .id,
+                1
+            );
         }
 
         // Remove ride
-        assert!(ride_manager.remove_ride_from_pending(ride_request.id).is_ok());
+        assert!(ride_manager
+            .remove_ride_from_pending(ride_request.id)
+            .is_ok());
         {
             assert!(!ride_manager.pending_rides.contains_key(&ride_request.id));
-            assert_eq!(ride_manager.has_pending_ride_request(ride_request.id), false);
+            assert_eq!(
+                ride_manager.has_pending_ride_request(ride_request.id),
+                false
+            );
         }
     }
 
@@ -263,17 +290,25 @@ mod tests {
         let driver_id2 = 102;
 
         // Insert ride and offer
-        assert!(ride_manager.insert_in_rides_and_offers(passenger_id, driver_id).is_ok());
-        assert!(ride_manager.insert_in_rides_and_offers(passenger_id, driver_id2).is_ok());
+        assert!(ride_manager
+            .insert_in_rides_and_offers(passenger_id, driver_id)
+            .is_ok());
+        assert!(ride_manager
+            .insert_in_rides_and_offers(passenger_id, driver_id2)
+            .is_ok());
 
         assert!(ride_manager.ride_and_offers.contains_key(&passenger_id));
-        assert_eq!(ride_manager.ride_and_offers[&passenger_id], vec![driver_id, driver_id2]);
+        assert_eq!(
+            ride_manager.ride_and_offers[&passenger_id],
+            vec![driver_id, driver_id2]
+        );
 
         // Clear offers
-        assert!(ride_manager.remove_offers_from_ride_and_offers(passenger_id).is_ok());
+        assert!(ride_manager
+            .remove_offers_from_ride_and_offers(passenger_id)
+            .is_ok());
         assert!(ride_manager.ride_and_offers.contains_key(&passenger_id));
         assert!(ride_manager.ride_and_offers[&passenger_id].is_empty());
-
     }
 
     #[test]
@@ -310,9 +345,13 @@ mod tests {
             y_dest: 15,
         };
 
-        assert!(ride_manager.insert_ride_in_pending(ride_request.clone()).is_ok());
+        assert!(ride_manager
+            .insert_ride_in_pending(ride_request.clone())
+            .is_ok());
 
-        let fetched_ride = ride_manager.get_pending_ride_request(ride_request.id).unwrap();
+        let fetched_ride = ride_manager
+            .get_pending_ride_request(ride_request.id)
+            .unwrap();
         assert_eq!(fetched_ride.id, ride_request.id);
     }
 }
