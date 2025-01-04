@@ -19,6 +19,7 @@ Este repositorio contiene la implementación de un sistema distribuido de ride s
 - **Gestor de Viajes:** Asigna conductores a pasajeros y actualiza posiciones en tiempo real durante un viaje.
 - **Reconexión Automática:** Los nodos intentan reconectarse de manera automática en caso de desconexión.
 - **Sistema de Pagos:** Integra un servicio externo para procesar pagos.
+- **Ubicacion en Tiempo Real** Los conductores van informando su ubicacion en tiempo real, manteniendo al lider informado.
 
 ---
 
@@ -95,6 +96,10 @@ El sistema utiliza un algoritmo de elección de líder basado en anillos. En cas
 ### Sistema de Pings
 
 Cada nodo envía pings periódicos para verificar la disponibilidad de los demás nodos. Si un nodo no responde dentro del intervalo de tiempo definido, se considera como desconectado.
+
+### Ubicacion en tiempo real
+
+Cada conductor informa al lider su ubicacion en todo momento del viaje.
 
 ### Reconexión Automática
 
